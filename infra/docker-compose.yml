@@ -1,0 +1,42 @@
+# Sobe o ambiente completo com `docker compose -f infra/docker-compose.yml up`.
+# Zero passo manual: o schema e a fila são criados pelos scripts de init.
+name: mini-outbox-cobranca
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: outbox-postgres
+    environment:
+      POSTGRES_DB: cobranca
+      POSTGRES_USER: cobranca
+      POSTGRES_PASSWORD: cobranca
+    ports:
+      - "5432:5432"
+    volumes:
+      # O MESMO arquivo que os testes aplicam via Testcontainers.
+      # DECISÃO: uma única fonte de verdade para o schema — ver docs/steps/step-01.md
+      - ./init/02-postgres.sql:/docker-entrypoint-initdb.d/02-postgres.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cobranca -d cobranca"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: outbox-localstack
+    environment:
+      # Teto de infra do projeto: um único serviço AWS.
+      SERVICES: sqs
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    volumes:
+      # ready.d roda depois que o LocalStack está de pé.
+      - ./init/01-localstack.sh:/etc/localstack/init/ready.d/01-localstack.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30

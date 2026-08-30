@@ -1,0 +1,92 @@
+package com.platinumcoin.outbox;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Stream;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * step-01: o chão. Prova que o ambiente sobe sozinho e que a fronteira
+ * arquitetural existe de fato — antes de haver qualquer regra de negócio para
+ * violá-la.
+ */
+class FundacaoTest extends AmbienteDeTeste {
+
+    @Test
+    @DisplayName("o schema aplicado pelo script de init tem as três tabelas do fluxo")
+    void schemaCriadoPeloScriptDeInit() throws SQLException {
+        List<String> tabelas = new ArrayList<>();
+        try (Connection conexao = novaConexao();
+             Statement stmt = conexao.createStatement();
+             ResultSet rs = stmt.executeQuery("""
+                     SELECT table_name FROM information_schema.tables
+                      WHERE table_schema = 'public' ORDER BY table_name
+                     """)) {
+            while (rs.next()) {
+                tabelas.add(rs.getString(1));
+            }
+        }
+
+        assertEquals(List.of("fatura", "outbox", "tentativa_debito"), tabelas);
+    }
+
+    @Test
+    @DisplayName("o outbox carrega a invariante 'um lançamento por fatura' no próprio schema")
+    void outboxTemUniquePorFatura() throws SQLException {
+        try (Connection conexao = novaConexao();
+             Statement stmt = conexao.createStatement();
+             ResultSet rs = stmt.executeQuery("""
+                     SELECT count(*) FROM pg_constraint
+                      WHERE conname = 'outbox_um_lancamento_por_fatura' AND contype = 'u'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1),
+                    "a rede de proteção sob o UPDATE condicional do step-02 precisa existir no banco");
+        }
+    }
+
+    @Test
+    @DisplayName("a fila que o mainframe consome já existe, sem passo manual")
+    void filaCriadaPeloScriptDeInit() {
+        String url = urlDaFila();
+
+        assertTrue(url.endsWith("/" + NOME_DA_FILA), "url inesperada: " + url);
+    }
+
+    @Test
+    @DisplayName("o domínio não conhece framework nem AWS SDK")
+    void dominioIsolado() throws IOException {
+        Path dominio = Path.of("src", "main", "java", "com", "platinumcoin", "outbox", "domain");
+        List<String> proibidos = new ArrayList<>();
+
+        try (Stream<Path> arquivos = Files.walk(dominio)) {
+            for (Path arquivo : arquivos.filter(p -> p.toString().endsWith(".java")).toList()) {
+                for (String linha : Files.readAllLines(arquivo)) {
+                    if (!linha.startsWith("import ")) {
+                        continue;
+                    }
+                    boolean permitido = linha.startsWith("import java.")
+                            || linha.startsWith("import com.platinumcoin.outbox.domain.");
+                    if (!permitido) {
+                        proibidos.add(arquivo.getFileName() + ": " + linha.trim());
+                    }
+                }
+            }
+        }
+
+        assertEquals(List.of(), proibidos,
+                "api → domain ← infra: o domínio só pode importar java.* e ele mesmo");
+    }
+}
