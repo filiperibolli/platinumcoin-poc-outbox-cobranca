@@ -69,10 +69,10 @@ remessa duas vezes e assere igualdade **byte a byte** (`ORDER BY id`).
 
 ## Definition of Done
 
-- [ ] Os dois testes passam.
-- [ ] `MontagemDeterministicaTest` prova 1 ciclo após 2 montagens.
-- [ ] `TrabalhoDerivadoDeterministicoTest` compara as duas Strings inteiras, não
+- [x] Os dois testes passam.
+- [x] `MontagemDeterministicaTest` prova 1 ciclo após 2 montagens.
+- [x] `TrabalhoDerivadoDeterministicoTest` compara as duas Strings inteiras, não
       um hash nem o tamanho.
-- [ ] A geração da remessa não lê nada além do ciclo e de suas tentativas —
+- [x] A geração da remessa não lê nada além do ciclo e de suas tentativas —
       nada de `now()`, `random`, ou ordem de `HashMap`.
-- [ ] CHANGELOG + commit `feat(outbox): montagem determinística de ciclo (step 02)`.
+- [x] CHANGELOG + commit `feat(outbox): montagem determinística de ciclo (step 02)`.

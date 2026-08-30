@@ -12,7 +12,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   portas, schema (`fatura`, `ciclo_cobranca`, `tentativa_debito`, `outbox`) e
   Testcontainers verde.
 
-- [ ] **step-02 — Montagem de ciclo** · [docs/steps/step-02.md](docs/steps/step-02.md)
+- [x] **step-02 — Montagem de ciclo** · [docs/steps/step-02.md](docs/steps/step-02.md)
   `MontarCicloUseCase`. Em **uma** transação: `INSERT` no ciclo e
   `UPDATE tentativa_debito SET ciclo_id, status='SOLICITADO' WHERE status='ABERTO'`.
   `UNIQUE (banco, data_ref)` torna a reexecução segura **por construção**.
@@ -94,12 +94,15 @@ domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02),
                     PublicarOutboxUseCase (05)
 domain/exception/   FalhaDePersistencia
 api/                LinhaRetorno (03)
-infra/persistence/  RepositorioFaturaPostgres, RepositorioCicloPostgres,
-                    RepositorioTentativaPostgres, RepositorioOutboxPostgres,
-                    PublicadorLancamentoSqs (05)
+infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
+                    RepositorioCicloPostgres, RepositorioTentativaPostgres,
+                    RepositorioOutboxPostgres, PublicadorLancamentoSqs (05)
 infra/config/       Ambiente (05) — DataSource + SqsClient
 Main                (06)
 ```
 
-Já existem: os seis modelos menos `Remessa`, as seis portas, a exceção, o
-`pom.xml` e os três arquivos de `infra/`.
+Já existem: os sete modelos, as seis portas, a exceção, os use cases de
+montagem e de geração de remessa, e em `infra/persistence` o `TransacaoJdbc`
+mais os repositórios de ciclo e de tentativa. Os métodos de retorno (step-03) e
+de fechamento (step-04) desses repositórios ainda não têm implementação — cada
+um chega junto com o teste que o prova.

@@ -1,6 +1,7 @@
 package com.platinumcoin.outbox;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.postgresql.ds.PGSimpleDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -11,6 +12,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -54,6 +56,7 @@ public abstract class AmbienteDeTeste {
                     .waitingFor(Wait.forLogMessage(".*fila " + NOME_DA_FILA + " criada.*\\n", 1));
 
     private static SqsClient sqs;
+    private static DataSource dados;
 
     @BeforeAll
     static void subirAmbiente() throws Exception {
@@ -76,6 +79,21 @@ public abstract class AmbienteDeTeste {
     protected static Connection novaConexao() throws SQLException {
         return DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+    }
+
+    /**
+     * O {@link DataSource} que a infra recebe — o mesmo tipo que o {@code Main}
+     * usará, e não uma conexão de teste passada à mão.
+     */
+    protected static DataSource dados() {
+        if (dados == null) {
+            PGSimpleDataSource fonte = new PGSimpleDataSource();
+            fonte.setUrl(POSTGRES.getJdbcUrl());
+            fonte.setUser(POSTGRES.getUsername());
+            fonte.setPassword(POSTGRES.getPassword());
+            dados = fonte;
+        }
+        return dados;
     }
 
     protected static SqsClient sqs() {
