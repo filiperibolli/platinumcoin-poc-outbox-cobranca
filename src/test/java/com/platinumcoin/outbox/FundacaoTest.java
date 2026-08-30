@@ -1,5 +1,6 @@
 package com.platinumcoin.outbox;
 
+import com.platinumcoin.outbox.domain.model.TentativaDebito;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -25,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FundacaoTest extends AmbienteDeTeste {
 
     @Test
-    @DisplayName("o schema aplicado pelo script de init tem as três tabelas do fluxo")
+    @DisplayName("o schema aplicado pelo script de init tem as quatro tabelas do fluxo")
     void schemaCriadoPeloScriptDeInit() throws SQLException {
         List<String> tabelas = new ArrayList<>();
         try (Connection conexao = novaConexao();
@@ -39,7 +41,7 @@ class FundacaoTest extends AmbienteDeTeste {
             }
         }
 
-        assertEquals(List.of("fatura", "outbox", "tentativa_debito"), tabelas);
+        assertEquals(List.of("ciclo_cobranca", "fatura", "outbox", "tentativa_debito"), tabelas);
     }
 
     @Test
@@ -53,8 +55,34 @@ class FundacaoTest extends AmbienteDeTeste {
                      """)) {
             assertTrue(rs.next());
             assertEquals(1, rs.getInt(1),
-                    "a rede de proteção sob o UPDATE condicional do step-02 precisa existir no banco");
+                    "a rede de proteção sob o UPDATE condicional do step-03 precisa existir no banco");
         }
+    }
+
+    @Test
+    @DisplayName("o ciclo carrega a invariante 'um ciclo por banco e data' no próprio schema")
+    void cicloTemUniquePorBancoEData() throws SQLException {
+        try (Connection conexao = novaConexao();
+             Statement stmt = conexao.createStatement();
+             ResultSet rs = stmt.executeQuery("""
+                     SELECT count(*) FROM pg_constraint
+                      WHERE conname = 'ciclo_um_por_banco_e_data' AND contype = 'u'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1),
+                    "a reexecução da montagem precisa ser segura por construção, não por consulta prévia");
+        }
+    }
+
+    @Test
+    @DisplayName("apenas o desfecho PAGO autoriza um lançamento contábil")
+    void somentePagoGeraLancamento() {
+        List<TentativaDebito.Status> geram = Arrays.stream(TentativaDebito.Status.values())
+                .filter(TentativaDebito.Status::geraLancamentoContabil)
+                .toList();
+
+        assertEquals(List.of(TentativaDebito.Status.PAGO), geram,
+                "NAO_PAGO, ERRO e SEM_RETORNO não são pagamentos — o mainframe não tem o que contabilizar");
     }
 
     @Test

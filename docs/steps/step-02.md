@@ -1,53 +1,67 @@
-# step-02 — Aplicar retorno (a transação)
+# step-02 — Montagem de ciclo
 
 ## Objetivo
 
-O coração do projeto: a transação única que decide **e** registra a intenção de
-publicar.
+A escrita que importa. Tudo que vem depois — remessa, retorno, fechamento,
+publicação — é **trabalho derivado**, reconstruível a partir do ciclo. Errar
+aqui é o único erro que não dá para desfazer reprocessando.
 
 ## Entregáveis
 
-- `api/LinhaRetorno` — record da linha do arquivo de retorno
-  (`tentativaId`, `resultado`).
-- `domain/usecase/AplicarRetornoUseCase` — recebe linhas, faz a transição.
-- `infra/persistence/RepositorioFaturaPostgres`,
-  `infra/persistence/RepositorioOutboxPostgres` — JDBC puro.
-- Testes: `RetornoAplicadoTest`, `RetornoDuplicadoTest`,
-  `MultiplasTentativasTest`, `DualWriteEvitadoTest`.
+- `domain/model/CicloCobranca` — `(id, banco, dataRef, status: MONTADO | ENVIADO
+  | FECHADO)`, mais a função pura que projeta a remessa a partir das tentativas.
+- `domain/usecase/MontarCicloUseCase`.
+- `infra/persistence/RepositorioFaturaPostgres` — a parte de ciclo e tentativas.
+- Testes: `MontagemDeterministicaTest`, `TrabalhoDerivadoDeterministicoTest`.
 
 ## Regra
 
-```sql
-UPDATE tentativa_debito SET status = 'PAGA'
- WHERE id = ? AND status = 'ENVIADA'
-```
-
-Se afetar **0 linhas**, a linha de retorno já foi aplicada (ou a tentativa não
-está num estado que aceita retorno) — ignora e segue. Se afetar 1 linha, na
-**mesma transação**:
+Em **uma** transação Postgres:
 
 ```sql
-UPDATE fatura SET status = 'PAGA' WHERE id = ? AND status = 'ABERTA';
-INSERT INTO outbox (fatura_id, payload, status) VALUES (?, ?, 'PENDENTE');
+INSERT INTO ciclo_cobranca (id, banco, data_ref, status)
+VALUES (?, ?, ?, 'MONTADO');
+
+UPDATE tentativa_debito
+   SET ciclo_id = ?, status = 'SOLICITADO'
+ WHERE status = 'ABERTO' AND banco = ? AND data_ref = ?;
 ```
 
-Duas escritas, um banco, um `COMMIT`. Nenhuma chamada externa dentro da
-transação.
+`COMMIT`. Nenhum sistema externo participa — nem arquivo, nem SFTP, nem fila.
 
 ## Decisões deste step
 
-- **UPDATE condicional em vez de tabela de dedup.** O estado atual da tentativa
-  já é a chave de idempotência; uma tabela separada seria um segundo lugar para
-  a mesma verdade ficar desatualizada.
-- **A guarda `AND status = 'ABERTA'` no update da fatura** cobre o caso de duas
-  tentativas da mesma fatura pagarem: a segunda não gera outbox.
+- **Idempotência por constraint, não por consulta prévia.** `UNIQUE (banco,
+  data_ref)` faz a segunda montagem estourar. A alternativa — consultar se o
+  ciclo já existe e só então inserir — é uma corrida: dois processos leem "não
+  existe" e ambos inserem. Verificação prévia é uma opinião sobre o passado;
+  constraint é um fato no momento da escrita.
+- **A remessa é função pura do ciclo.** Mesmo `ciclo_id`, mesma String, byte a
+  byte. Não é elegância: é o que permite regerar e retransmitir sem medo depois
+  de qualquer falha. Um artefato derivado que muda a cada geração vira um
+  segundo sistema de registro.
+- **`ciclo_id` nulo enquanto `ABERTO`.** O nulo diz "ainda não pertence a
+  nenhum ciclo" — estado real, não dado faltante.
+- **Formato posicional trivial, 3 campos.** CNAB 240 de verdade é I/O e formato,
+  não design — ver README, "fora de escopo".
+
+## Testes obrigatórios
+
+**`MontagemDeterministicaTest`** — monta o ciclo, força falha, reexecuta.
+Assere que **não** surge um segundo ciclo (o `UNIQUE` barra) e que nenhuma
+tentativa fica em estado inconsistente: ou todas do recorte estão `SOLICITADO`
+com o `ciclo_id` preenchido, ou todas continuam `ABERTO` sem ciclo. Nunca meio a
+meio.
+
+**`TrabalhoDerivadoDeterministicoTest`** — a partir do mesmo `ciclo_id`, gera a
+remessa duas vezes e assere igualdade **byte a byte** (`ORDER BY id`).
 
 ## Definition of Done
 
-- [ ] Os quatro testes passam.
-- [ ] `RetornoDuplicadoTest` prova **1** linha no outbox para 2 aplicações.
-- [ ] `MultiplasTentativasTest` prova **1** linha no outbox para 2 tentativas.
-- [ ] `DualWriteEvitadoTest` prova que, com rollback forçado, o outbox está
-      vazio, a fatura está `ABERTA` e a reexecução processa normal.
-- [ ] `PublicadorLancamento` **não** é chamado por este use case.
-- [ ] CHANGELOG + commit `feat(outbox): aplicar retorno em transação única (step 02)`.
+- [ ] Os dois testes passam.
+- [ ] `MontagemDeterministicaTest` prova 1 ciclo após 2 montagens.
+- [ ] `TrabalhoDerivadoDeterministicoTest` compara as duas Strings inteiras, não
+      um hash nem o tamanho.
+- [ ] A geração da remessa não lê nada além do ciclo e de suas tentativas —
+      nada de `now()`, `random`, ou ordem de `HashMap`.
+- [ ] CHANGELOG + commit `feat(outbox): montagem determinística de ciclo (step 02)`.

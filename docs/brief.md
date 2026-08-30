@@ -15,6 +15,13 @@ lendo dois sistemas.
 Uma fatura pode ter **N tentativas de débito** (o banco reapresenta), mas no
 máximo **um lançamento**.
 
+As tentativas não vão ao parceiro uma a uma: elas são agrupadas num **ciclo de
+cobrança** (um banco, uma data), transmitidas em lote e respondidas em lote. O
+ciclo é a única escrita que importa — remessa, retorno, fechamento e publicação
+são trabalho derivado dele. E o parceiro pode simplesmente não responder por
+alguma tentativa; quando o ciclo fecha, isso vira `SEM_RETORNO`, nunca
+`NAO_PAGO`. Silêncio não é uma recusa.
+
 ## O problema
 
 O banco de dados e a fila são sistemas distintos, sem transação distribuída. Só
@@ -50,6 +57,7 @@ assumido, com chave de dedup determinística para o consumidor resolver.
 | No máximo um lançamento **decidido** por fatura | deste projeto (`UPDATE` condicional + outbox transacional) |
 | Todo lançamento decidido é **eventualmente** publicado | deste projeto (relay reprocessa `PENDENTE`) |
 | No máximo um lançamento **efetivado** no mainframe | do consumidor (dedup pela chave `faturaId`) |
+| Nenhum resultado é inventado para quem não respondeu | deste projeto (`SEM_RETORNO`) |
 
 ## Não-objetivos
 

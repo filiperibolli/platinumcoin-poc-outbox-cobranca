@@ -29,10 +29,12 @@ public interface RepositorioFatura {
 
     /**
      * Aplica o resultado do retorno a uma tentativa, <b>somente</b> se ela ainda
-     * estiver {@code ENVIADA}.
+     * estiver {@code ENVIADO_PARCEIRO} — ou seja, se ainda houver retorno a
+     * receber.
      *
      * @return 1 se a transição aconteceu, 0 se a tentativa já havia sido
-     *         resolvida (retorno duplicado) ou não existe.
+     *         resolvida (retorno duplicado, ou ciclo já fechado com
+     *         {@code SEM_RETORNO}) ou não existe.
      */
     int registrarResultadoDaTentativa(Transacao tx, String tentativaId, TentativaDebito.Status resultado);
 

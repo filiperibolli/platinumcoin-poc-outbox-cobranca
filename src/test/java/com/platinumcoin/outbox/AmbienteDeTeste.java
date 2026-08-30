@@ -97,7 +97,7 @@ public abstract class AmbienteDeTeste {
     /** Zera o estado entre testes sem derrubar os containers. */
     protected static void limparTabelas() throws SQLException {
         try (Connection conexao = novaConexao(); Statement stmt = conexao.createStatement()) {
-            stmt.execute("TRUNCATE outbox, tentativa_debito, fatura RESTART IDENTITY CASCADE");
+            stmt.execute("TRUNCATE outbox, tentativa_debito, ciclo_cobranca, fatura RESTART IDENTITY CASCADE");
         }
     }
 }

@@ -2,7 +2,7 @@
 
 - **Status:** aceito
 - **Data:** 2026-08-30
-- **Contexto:** step-03
+- **Contexto:** step-05 (o relay)
 
 ## Contexto
 

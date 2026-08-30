@@ -19,9 +19,15 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
 5. **Nenhum sistema externo dentro da transação do banco.** A transação escreve
    em `fatura` e em `outbox`; o SQS é chamado depois, por outro componente.
 6. **Os testes de falha nunca são cortados.** Se o escopo apertar, corta-se
-   regra de negócio. `CrashDoRelayTest` e `DualWriteEvitadoTest` são a razão de
-   o projeto existir.
+   regra de negócio. Os cinco intocáveis, porque são a prova de que os
+   trade-offs defendidos funcionam:
+   `RetornoDuplicadoTest`, `MultiplasTentativasTest`, `CrashDoRelayTest`,
+   `MontagemDeterministicaTest`, `FechamentoNaoInventaResultadoTest`.
 7. **`mvn test` sobe tudo sozinho** via Testcontainers, sem depender do Compose.
+8. **Teto de 24 arquivos de produção** (`src/main` + `pom.xml` + `infra/`). Os
+   testes ficam fora do teto — ver o orçamento em `PLAN.md`.
+9. **Só `PAGO` gera lançamento contábil.** `NAO_PAGO`, `ERRO` e `SEM_RETORNO`
+   nunca. A regra mora em `TentativaDebito.Status.geraLancamentoContabil()`.
 
 ## Convenções
 

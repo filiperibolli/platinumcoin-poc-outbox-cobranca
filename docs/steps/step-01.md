@@ -11,7 +11,8 @@ Testcontainers verde. Nenhuma regra de negócio ainda — só o chão onde os st
 - `pom.xml` — Java 21, JUnit 5, Testcontainers (Postgres + LocalStack),
   driver Postgres, AWS SDK v2 (só SQS).
 - `infra/docker-compose.yml` — Postgres + LocalStack, com init automático.
-- `infra/init/02-postgres.sql` — schema: `fatura`, `tentativa_debito`, `outbox`.
+- `infra/init/02-postgres.sql` — schema: `fatura`, `ciclo_cobranca`,
+  `tentativa_debito`, `outbox`.
 - `infra/init/01-localstack.sh` — cria a fila `lancamentos-contabeis`.
 - `domain/model/` — `Fatura`, `TentativaDebito`, `LancamentoContabil`,
   `RegistroOutbox` (records; enums aninhados).
@@ -22,8 +23,9 @@ Testcontainers verde. Nenhuma regra de negócio ainda — só o chão onde os st
 - `domain/exception/FalhaDePersistencia`.
 - `src/test/.../AmbienteDeTeste` — base da suíte: sobe Postgres + LocalStack e
   aplica os **mesmos** scripts de `infra/init/`.
-- `src/test/.../FundacaoTest` — as três tabelas existem, o `UNIQUE` do outbox
-  existe, a fila existe no SQS, e o domínio não importa framework nem AWS.
+- `src/test/.../FundacaoTest` — as quatro tabelas existem, os `UNIQUE` do outbox
+  e do ciclo existem, só `PAGO` gera lançamento, a fila existe no SQS, e o
+  domínio não importa framework nem AWS.
 
 ## Decisões deste step
 
@@ -34,7 +36,7 @@ Testcontainers verde. Nenhuma regra de negócio ainda — só o chão onde os st
   para o schema; se divergirem, o teste passa e a produção quebra.
 - **`outbox.fatura_id` com `UNIQUE`.** A invariante "no máximo um lançamento por
   fatura" fica no banco, não só no código. É a rede de proteção sob o `UPDATE`
-  condicional do step-02.
+  condicional do step-03.
 - **Portas sem implementação neste step.** Definir a fronteira antes de ter
   infra é o que impede o domínio de nascer acoplado ao JDBC.
 - **O isolamento do domínio é um teste, não uma convenção.** `dominioIsolado`
@@ -55,3 +57,13 @@ Testcontainers verde. Nenhuma regra de negócio ainda — só o chão onde os st
       prontos, sem passo manual.
 - [x] `PLAN.md` com step-01 marcado, `CHANGELOG.md` atualizado, commit
       `feat(outbox): fundação, schema e ambiente de teste (step 01)`.
+
+## Nota — realinhamento posterior
+
+Depois deste step, antes do step-02, o projeto foi realinhado ao desenho de
+referência: a máquina de estados de `TentativaDebito` passou a ser
+`ABERTO → SOLICITADO → ENVIADO_PARCEIRO → PAGO | NAO_PAGO | ERRO | SEM_RETORNO`,
+e o schema ganhou `ciclo_cobranca` mais as colunas `banco`, `data_ref`,
+`ciclo_id` e `motivo` em `tentativa_debito`. Os steps foram reordenados para
+seguir o ciclo de vida real — ver `CHANGELOG.md`. A DoD acima continua válida e
+verificada.

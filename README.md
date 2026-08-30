@@ -36,32 +36,58 @@ testado: se o relay morre entre o `send` e o `UPDATE outbox`, a mensagem é
 republicada — at-least-once, com chave de dedup determinística para o consumidor
 resolver.
 
-## O fluxo
+## O ciclo de vida
+
+A montagem do ciclo é a **única escrita que importa**. Remessa, retorno,
+fechamento e publicação são trabalho derivado: dado o ciclo, todos podem ser
+refeitos e chegam ao mesmo lugar. Por isso a remessa é uma função pura do ciclo
+— mesma entrada, mesmos bytes — e por isso a reexecução da montagem é barrada
+por um `UNIQUE (banco, data_ref)`, e não por uma consulta prévia que perderia a
+corrida contra outro processo.
 
 ```mermaid
-flowchart LR
-    subgraph tx["UMA transação Postgres"]
-        direction TB
-        A["AplicarRetornoUseCase"] -->|"UPDATE tentativa<br/>WHERE status='ENVIADA'"| B[("fatura<br/>tentativa_debito")]
-        A -->|"INSERT PENDENTE"| C[("outbox")]
+flowchart TB
+    subgraph montagem["step-02 · UMA transação Postgres"]
+        direction LR
+        M["MontarCicloUseCase"] --> CC[("ciclo_cobranca<br/>MONTADO")]
+        M --> T1[("tentativa_debito<br/>ABERTO → SOLICITADO")]
     end
 
-    R["PublicarOutboxUseCase<br/>(relay)"]
-    Q(["SQS<br/>lancamentos-contabeis"])
-    M["Mainframe legado<br/>dedup por chaveDedup"]
+    REM["remessa<br/>função pura do ciclo, regerável byte a byte"]
+    montagem --> REM
 
-    C -.->|"SELECT PENDENTE"| R
-    R -->|"send + chaveDedup"| Q
-    R -.->|"UPDATE PUBLICADO"| C
-    Q --> M
+    subgraph parceiro["Fora do nosso controle · banco parceiro"]
+        direction LR
+        PREC["recebe a remessa"] --> PDEB["processa o débito"] --> PRET["devolve o retorno<br/>— ou não devolve"]
+    end
 
-    style tx fill:#0d47a1,stroke:#42a5f5,color:#fff
-    style Q fill:#4a148c,stroke:#ce93d8,color:#fff
-    style M fill:#1b5e20,stroke:#81c784,color:#fff
+    REM -->|"transmite · SOLICITADO → ENVIADO_PARCEIRO"| parceiro
+
+    subgraph retorno["step-03 · UMA transação Postgres"]
+        direction LR
+        AR["AplicarRetornoUseCase<br/>UPDATE ... WHERE status = ENVIADO_PARCEIRO"]
+        AR --> TD[("tentativa → PAGO / NAO_PAGO / ERRO<br/>fatura ABERTA → PAGA")]
+        AR --> OB[("outbox PENDENTE<br/>só quando PAGO")]
+    end
+
+    parceiro --> retorno
+
+    FC["FecharCicloUseCase · step-04<br/>ENVIADO_PARCEIRO → SEM_RETORNO<br/>nunca NAO_PAGO"]
+    parceiro -.->|"o ciclo fecha e nada chegou"| FC
+    FC --> CC
+
+    RL["PublicarOutboxUseCase · relay · step-05"]
+    OB -.->|"SELECT PENDENTE"| RL
+    RL -->|"send + chaveDedup"| Q(["SQS · lancamentos-contabeis"])
+    RL -.->|"UPDATE PUBLICADO"| OB
+    Q --> MF["Mainframe legado<br/>deduplica por chaveDedup"]
 ```
 
-A linha tracejada entre o relay e o outbox é onde mora o trade-off: entre o
-`send` e o `UPDATE PUBLICADO` não há transação possível.
+Duas coisas o diagrama torna óbvias. A primeira: o subgraph do parceiro é o que
+não controlamos — ele pode processar e não responder, e é por isso que existe
+`SEM_RETORNO`. A segunda: entre o `send` e o `UPDATE PUBLICADO` (as linhas
+tracejadas do relay) não há transação possível. É ali que mora o trade-off do
+projeto inteiro.
 
 ## Como rodar
 
@@ -110,7 +136,10 @@ docker compose -f infra/docker-compose.yml exec postgres \
 |---|---|---|
 | Outbox na mesma transação, publicação fora ([ADR-0001](docs/adr/0001-outbox-transacional-em-vez-de-dual-write.md)) | publicar e depois commitar | latência do relay, uma tabela a mais, escrita dobrada na transação de negócio |
 | At-least-once + chave de dedup ([ADR-0002](docs/adr/0002-at-least-once-mais-dedup-em-vez-de-fifo.md)) | SQS FIFO com `MessageDeduplicationId` | duplicata possível na fila; o consumidor precisa cooperar |
-| `UPDATE ... WHERE status = 'ENVIADA'` | tabela de deduplicação de retornos | a idempotência fica implícita no número de linhas afetadas, e não num registro explícito |
+| `UPDATE ... WHERE status = 'ENVIADO_PARCEIRO'` | tabela de deduplicação de retornos | a idempotência fica implícita no número de linhas afetadas, e não num registro explícito |
+| `UNIQUE (banco, data_ref)` no ciclo | consultar antes se o ciclo já existe | a segunda montagem falha com erro de constraint em vez de ser ignorada em silêncio — mas verificação prévia é uma corrida, e constraint é um fato |
+| Ausência de retorno vira `SEM_RETORNO` | colapsar em `NAO_PAGO` | mais um estado para tratar — em troca de não notificar o cliente sobre uma falha de débito que ninguém afirmou que ocorreu |
+| Só `PAGO` gera lançamento, e a regra mora no enum | um `if` dentro do use case | um estado novo quebra a compilação do lugar certo, em vez de passar despercebido |
 | `UNIQUE (fatura_id)` no outbox | só a guarda no código | o segundo lançamento estoura em vez de ser ignorado silenciosamente |
 | JDBC puro, sem framework | Spring Boot + `@Transactional` | mais código de encanamento — em troca, a fronteira transacional fica visível no código, que é justamente o que o projeto quer mostrar |
 
@@ -148,6 +177,32 @@ propósito:
   tabela que mais cresce.
 - **Sem pool de conexões, sem métricas, sem tracing.**
 
+E, do lado do desenho de sistema, ficou de fora tudo que é canal e formato — não
+porque seja fácil, mas porque não muda nenhuma das decisões que o projeto
+defende:
+
+- **SFTP e parsing de CNAB 240**, incluindo validação de trailer e detecção de
+  quiescência do arquivo. É I/O e formato: o resultado do parse alimenta
+  exatamente o mesmo `AplicarRetornoUseCase`. Aqui a remessa é uma String
+  determinística de 3 campos posicionais, que é a única propriedade do formato
+  que o projeto usa como argumento.
+- **Canal síncrono com throttle** (o banco que expõe API REST em vez de arquivo)
+  e o **rate limiter distribuído** que ele exigiria. Trocaria o ciclo em lote por
+  uma tentativa por requisição — muda o transporte e a política de vazão, não a
+  fronteira transacional.
+- **Conciliação D+1 contra o extrato agregado de liquidação.** É o controle que
+  pega o que este desenho deixa passar (o lançamento duplicado que o consumidor
+  não deduplicou). Pertence à camada de controle contábil, não ao produtor.
+- **Ciclo de vida da autorização de débito e sua revogação** pelos dois caminhos
+  — o cliente revogando no app e o parceiro informando `AUTORIZACAO_REVOGADA` no
+  retorno. Aqui a revogação aparece só como motivo de `NAO_PAGO`; o agregado de
+  autorização e a corrida entre os dois caminhos são um projeto à parte.
+- **Política de retentativa** e a classificação **transitório × permanente** dos
+  códigos de retorno. `SALDO_INSUFICIENTE` pede reapresentação;
+  `CONTA_ENCERRADA` não pede nenhuma. Este projeto registra o motivo e para por
+  aí — decidir o que fazer com ele é regra de negócio, e regra de negócio é o
+  que se corta primeiro.
+
 ## Estrutura
 
 ```
@@ -156,10 +211,20 @@ docs/adr/                as duas decisões que sustentam o projeto
 docs/steps/              o que cada step entrega e sua Definition of Done
 infra/                   docker-compose + scripts de init (schema e fila)
 src/main/java/...
-  domain/model           Fatura, TentativaDebito, LancamentoContabil, RegistroOutbox
+  domain/model           Fatura, CicloCobranca, TentativaDebito,
+                         LancamentoContabil, RegistroOutbox
   domain/port            RepositorioFatura, RepositorioOutbox, PublicadorLancamento
-  domain/usecase         AplicarRetornoUseCase, PublicarOutboxUseCase
+  domain/usecase         MontarCiclo, AplicarRetorno, FecharCiclo, PublicarOutbox
   infra/persistence      JDBC puro
+```
+
+Máquina de estados:
+
+```
+CicloCobranca    MONTADO → ENVIADO → FECHADO
+TentativaDebito  ABERTO → SOLICITADO → ENVIADO_PARCEIRO → PAGO | NAO_PAGO | ERRO
+                                                        → SEM_RETORNO (fechamento)
+Fatura           ABERTA → PAGA → LANCADA
 ```
 
 `api → domain ← infra`. O domínio não importa framework nem AWS SDK — e há um
