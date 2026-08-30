@@ -8,11 +8,18 @@ aqui é o único erro que não dá para desfazer reprocessando.
 
 ## Entregáveis
 
-- `domain/model/CicloCobranca` — `(id, banco, dataRef, status: MONTADO | ENVIADO
-  | FECHADO)`, mais a função pura que projeta a remessa a partir das tentativas.
-- `domain/usecase/MontarCicloUseCase`.
-- `infra/persistence/RepositorioFaturaPostgres` — a parte de ciclo e tentativas.
+- `domain/model/Remessa` — o artefato e seu formato, construído por uma função
+  pura a partir do ciclo e de suas tentativas.
+- `domain/usecase/MontarCicloUseCase` — a transação.
+- `domain/usecase/GerarRemessaUseCase` — lê o ciclo pela porta e delega a
+  projeção a `Remessa`. Separado da montagem porque é outra operação: pode rodar
+  quantas vezes quiser, e é justamente isso que o teste prova.
+- `infra/persistence/RepositorioCicloPostgres`,
+  `infra/persistence/RepositorioTentativaPostgres` — JDBC puro.
 - Testes: `MontagemDeterministicaTest`, `TrabalhoDerivadoDeterministicoTest`.
+
+`domain/model/CicloCobranca` e as portas `RepositorioCiclo` e
+`RepositorioTentativa` já existem.
 
 ## Regra
 
@@ -40,6 +47,10 @@ UPDATE tentativa_debito
   byte. Não é elegância: é o que permite regerar e retransmitir sem medo depois
   de qualquer falha. Um artefato derivado que muda a cada geração vira um
   segundo sistema de registro.
+- **Gerar a remessa é um use case separado da montagem.** A montagem acontece
+  uma vez e não pode se repetir; a geração acontece quantas vezes for preciso e
+  precisa dar sempre o mesmo resultado. São garantias opostas — juntá-las num
+  método só esconderia a mais importante das duas.
 - **`ciclo_id` nulo enquanto `ABERTO`.** O nulo diz "ainda não pertence a
   nenhum ciclo" — estado real, não dado faltante.
 - **Formato posicional trivial, 3 campos.** CNAB 240 de verdade é I/O e formato,

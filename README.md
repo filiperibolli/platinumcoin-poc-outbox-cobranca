@@ -211,11 +211,13 @@ docs/adr/                as duas decisões que sustentam o projeto
 docs/steps/              o que cada step entrega e sua Definition of Done
 infra/                   docker-compose + scripts de init (schema e fila)
 src/main/java/...
-  domain/model           Fatura, CicloCobranca, TentativaDebito,
+  domain/model           Fatura, CicloCobranca, TentativaDebito, Remessa,
                          LancamentoContabil, RegistroOutbox
-  domain/port            RepositorioFatura, RepositorioOutbox, PublicadorLancamento
-  domain/usecase         MontarCiclo, AplicarRetorno, FecharCiclo, PublicarOutbox
-  infra/persistence      JDBC puro
+  domain/port            RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
+                         RepositorioOutbox, PublicadorLancamento
+  domain/usecase         MontarCiclo, GerarRemessa, AplicarRetorno,
+                         FecharCiclo, PublicarOutbox
+  infra/persistence      JDBC puro, uma implementação por porta
 ```
 
 Máquina de estados:

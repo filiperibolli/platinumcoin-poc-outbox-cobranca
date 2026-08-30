@@ -24,8 +24,12 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
    `RetornoDuplicadoTest`, `MultiplasTentativasTest`, `CrashDoRelayTest`,
    `MontagemDeterministicaTest`, `FechamentoNaoInventaResultadoTest`.
 7. **`mvn test` sobe tudo sozinho** via Testcontainers, sem depender do Compose.
-8. **Teto de 24 arquivos de produção** (`src/main` + `pom.xml` + `infra/`). Os
-   testes ficam fora do teto — ver o orçamento em `PLAN.md`.
+8. **Enxuto é propriedade do desenho, não cota de arquivos.** Não há teto.
+   A régua é outra: cada arquivo carrega uma responsabilidade que dá para
+   nomear sem usar "e". Um arquivo a mais que deixa a fronteira mais nítida é
+   ganho; um arquivo a mais que só muda código de lugar é custo. O que se corta
+   quando aperta é **escopo** — regra de negócio, canal, formato — nunca a
+   clareza da fronteira e nunca os testes de falha.
 9. **Só `PAGO` gera lançamento contábil.** `NAO_PAGO`, `ERRO` e `SEM_RETORNO`
    nunca. A regra mora em `TentativaDebito.Status.geraLancamentoContabil()`.
 

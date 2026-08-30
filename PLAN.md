@@ -16,7 +16,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   `MontarCicloUseCase`. Em **uma** transação: `INSERT` no ciclo e
   `UPDATE tentativa_debito SET ciclo_id, status='SOLICITADO' WHERE status='ABERTO'`.
   `UNIQUE (banco, data_ref)` torna a reexecução segura **por construção**.
-  A remessa é função pura do ciclo.
+  `GerarRemessaUseCase` projeta a remessa — função pura do ciclo.
   Testes: `MontagemDeterministicaTest`, `TrabalhoDerivadoDeterministicoTest`.
 
 - [ ] **step-03 — Aplicar retorno** · [docs/steps/step-03.md](docs/steps/step-03.md)
@@ -68,43 +68,38 @@ Só `PAGO` gera linha no outbox — a pergunta é
 `TentativaDebito.Status.geraLancamentoContabil()`, e ela mora no enum
 justamente para que um estado novo obrigue a respondê-la.
 
-## Orçamento de arquivos (teto: 24 de produção)
+## Enxuto por desenho, não por cota
 
-O teto conta `src/main` + `pom.xml` + `infra/`. Os testes ficam fora: as cinco
-provas de falha são intocáveis por definição, e sozinhas já estourariam
-qualquer teto. Se apertar, corta-se regra de negócio.
+Não há teto de arquivos. A régua é: **cada arquivo carrega uma responsabilidade
+que dá para nomear sem usar "e"**. Um arquivo a mais que deixa a fronteira mais
+nítida é ganho; um arquivo a mais que só muda código de lugar é custo.
 
-| Onde | Arquivos | Quais |
-|---|---|---|
-| `domain/model` | 5 | Fatura, TentativaDebito, LancamentoContabil, RegistroOutbox, **CicloCobranca** (02) |
-| `domain/port` | 4 | Transacao, RepositorioFatura, RepositorioOutbox, PublicadorLancamento |
-| `domain/exception` | 1 | FalhaDePersistencia |
-| `domain/usecase` | 4 | MontarCiclo (02), AplicarRetorno (03), FecharCiclo (04), PublicarOutbox (05) |
-| `api` | 1 | LinhaRetorno (03) |
-| `infra/persistence` | 3 | RepositorioFaturaPostgres, RepositorioOutboxPostgres, PublicadorLancamentoSqs |
-| `infra/config` | 1 | Ambiente (05) |
-| raiz | 1 | Main (06) |
-| build/infra | 4 | pom.xml, docker-compose.yml, 01-localstack.sh, 02-postgres.sql |
-| **Total** | **24** | 15 já existem |
-
-Duas consolidações já embutidas para caber: a projeção da remessa é um método
-estático de `CicloCobranca` (em vez de um `GerarRemessaUseCase`), e as operações
-de ciclo ficam em `RepositorioFatura` — que é o repositório do agregado de
-cobrança, não só da tabela `fatura`.
+Quando o escopo apertar, corta-se **escopo** — regra de negócio, canal, formato —
+e não a estrutura. Nunca os testes de falha. Um projeto que perde a porta certa
+para caber numa contagem não ficou enxuto, ficou mal desenhado com menos
+arquivos.
 
 ## Mapa de arquivos
 
+Uma porta por agregado, um use case por operação inbound.
+
 ```
-domain/model/       Fatura, TentativaDebito, LancamentoContabil, RegistroOutbox,
-                    CicloCobranca (+ remessa: função pura do ciclo)
-domain/port/        RepositorioFatura, RepositorioOutbox, PublicadorLancamento
+domain/model/       Fatura, CicloCobranca, TentativaDebito, Remessa (02),
+                    LancamentoContabil, RegistroOutbox
+domain/port/        RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
+                    RepositorioOutbox, PublicadorLancamento
                     Transacao (fronteira transacional, não é porta de negócio)
-domain/usecase/     MontarCicloUseCase (02), AplicarRetornoUseCase (03),
-                    FecharCicloUseCase (04), PublicarOutboxUseCase (05)
+domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02),
+                    AplicarRetornoUseCase (03), FecharCicloUseCase (04),
+                    PublicarOutboxUseCase (05)
 domain/exception/   FalhaDePersistencia
 api/                LinhaRetorno (03)
-infra/persistence/  RepositorioFaturaPostgres, RepositorioOutboxPostgres,
+infra/persistence/  RepositorioFaturaPostgres, RepositorioCicloPostgres,
+                    RepositorioTentativaPostgres, RepositorioOutboxPostgres,
                     PublicadorLancamentoSqs (05)
 infra/config/       Ambiente (05) — DataSource + SqsClient
 Main                (06)
 ```
+
+Já existem: os seis modelos menos `Remessa`, as seis portas, a exceção, o
+`pom.xml` e os três arquivos de `infra/`.

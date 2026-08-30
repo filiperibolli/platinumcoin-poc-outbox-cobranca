@@ -3,6 +3,43 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [não versionado] — 2026-08-30 — Fim do teto de arquivos
+
+O teto de 24 arquivos saiu. Ele estava fazendo o projeto escolher a fronteira
+errada para caber numa contagem — que é o oposto de enxuto.
+
+### Removido
+
+- **Teto de arquivos de produção** e a seção "Orçamento de arquivos" do
+  `PLAN.md`. No lugar, um critério: cada arquivo carrega uma responsabilidade
+  que dá para nomear sem usar "e"; corta-se escopo, não estrutura.
+
+### Alterado
+
+- **`RepositorioFatura` deixou de cuidar também de tentativas.** Eram sete
+  métodos sobre duas entidades. Virou `RepositorioFatura` (a fatura, que só muda
+  no retorno) e **`RepositorioTentativa`** (a tentativa, escrita por três
+  operações: montagem, retorno e fechamento).
+- **A remessa deixou de ser um método estático em `CicloCobranca`.** Vira
+  `domain/model/Remessa` (o artefato e seu formato) mais
+  `domain/usecase/GerarRemessaUseCase` (a operação). Montar e gerar têm
+  garantias opostas — a montagem não pode se repetir, a geração precisa poder
+  repetir-se com resultado idêntico — e um método só escondia a segunda.
+
+### Adicionado
+
+- **`RepositorioCiclo`** — porta própria para a escrita que importa, em vez de
+  métodos de ciclo pendurados no repositório de faturas.
+- **`CicloCobranca`** — o modelo que faltava para a tabela `ciclo_cobranca`, já
+  criada no realinhamento anterior.
+
+AI: est 45min / actual 20min / ~95% generated / 1 issue caught in review
+
+<!--
+A 1: RepositorioCiclo importava CicloCobranca, que ainda não existia — as portas
+novas não compilariam sem o modelo.
+-->
+
 ## [não versionado] — 2026-08-30 — Realinhamento ao desenho de referência
 
 Ajuste de rumo antes do step-02, sem implementar regra nova. O projeto passou a

@@ -10,8 +10,9 @@ publicar.
 - `api/LinhaRetorno` — record da linha do arquivo de retorno
   (`tentativaId`, `resultado`, `motivo`).
 - `domain/usecase/AplicarRetornoUseCase` — recebe linhas, faz a transição.
-- `infra/persistence/RepositorioFaturaPostgres` (parte de retorno),
-  `infra/persistence/RepositorioOutboxPostgres` — JDBC puro.
+- `infra/persistence/RepositorioFaturaPostgres`,
+  `infra/persistence/RepositorioOutboxPostgres` — JDBC puro
+  (`RepositorioTentativaPostgres` vem do step-02).
 - Testes: `RetornoAplicadoTest`, `RetornoDuplicadoTest`,
   `MultiplasTentativasTest`, `DualWriteEvitadoTest`.
 
