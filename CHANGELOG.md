@@ -3,6 +3,72 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-02] — 2026-08-30 — Montagem de ciclo
+
+A escrita que importa. Tudo o que vem depois — remessa, retorno, fechamento,
+publicação — passa a ser trabalho derivado dela.
+
+### Adicionado
+
+- **`MontarCicloUseCase`** — numa transação, `INSERT` no ciclo mais
+  `UPDATE tentativa_debito SET ciclo_id, status = 'SOLICITADO'` no recorte
+  (banco + data de referência). Ou existe o ciclo com as tentativas dentro, ou
+  não existe nada.
+- **`domain/model/Remessa`** — o artefato e seu formato: uma função pura do
+  ciclo e de suas tentativas, três campos posicionais por linha
+  (id da tentativa, id da fatura, número), `\n` fixo e `Locale.ROOT`.
+- **`GerarRemessaUseCase`** — lê o ciclo pela porta e delega a projeção à
+  `Remessa`. Separado da montagem porque promete o oposto dela: a montagem
+  acontece uma vez, a geração acontece quantas vezes for preciso com resultado
+  idêntico.
+- **`infra/persistence/TransacaoJdbc`** — a `Transacao` do domínio encarnada
+  numa conexão com `autoCommit` desligado, mais a `Fabrica` que a abre. É o
+  único ponto do projeto que sabe que "uma transação" e "uma conexão" são a
+  mesma coisa — e é o que faz escritas de repositórios diferentes caírem no
+  mesmo `COMMIT`.
+- **`RepositorioCicloPostgres`** e **`RepositorioTentativaPostgres`** — JDBC
+  puro. Os métodos de retorno (step-03) e de fechamento (step-04) ficam
+  declarados e não implementados: SQL sem teste nasce parecendo pronto.
+- **`Cenario`** nos testes — os dados de partida (fatura aberta com tentativa
+  `ABERTO`), fora do `AmbienteDeTeste`, que cuida dos containers.
+- **`AmbienteDeTeste.dados()`** — um `DataSource`, o mesmo tipo que a infra
+  recebe em produção, em vez de conexões passadas à mão.
+
+### Decisões
+
+- **Idempotência por constraint, não por consulta prévia.** A segunda montagem
+  do mesmo banco e data estoura no `UNIQUE (banco, data_ref)`. Consultar antes
+  seria uma corrida: dois processos leem "não existe" e ambos inserem.
+- **A remessa é ordenada dentro da projeção, e não só no `ORDER BY`.** Assim a
+  igualdade byte a byte é propriedade da `Remessa`, e não de quem a alimenta.
+- **`\n` fixo em vez de `System.lineSeparator()`.** A remessa gerada no Windows
+  e a gerada no Linux precisam ser o mesmo arquivo.
+- **`close()` da transação não lança.** Chamado pelo `try-with-resources`, um
+  erro ali esconderia a exceção que de fato abortou o use case — e é ela que
+  diz por que a transação está sendo desfeita.
+
+### Verificado
+
+- `mvn test` → 11 testes, 0 falhas (6 de fundação, 3 de montagem, 2 de trabalho
+  derivado).
+- `MontagemDeterministicaTest`: o recorte é respeitado (outro banco e outra data
+  continuam `ABERTO`); falha entre o `INSERT` e o `UPDATE` não deixa ciclo órfão
+  nem tentativa meio-atribuída, e o recorte continua montável; a segunda
+  montagem não cria um segundo ciclo.
+- `TrabalhoDerivadoDeterministicoTest`: duas gerações comparadas como Strings
+  inteiras, e o formato posicional conferido linha a linha com as tentativas
+  inseridas fora de ordem.
+
+AI: est 1h30 / actual 25min / ~95% generated / 2 issues caught in review
+
+<!--
+As 2: (1) a validação "a tentativa é deste ciclo" estava num `peek` antes do
+`sorted` — efeito colateral pendurado num estágio preguiçoso, virou um `forEach`
+explícito; (2) `TransacaoJdbc.close()` lançava `FalhaDePersistencia`, o que
+contraria o contrato "não lança" da porta e mascararia a exceção original dentro
+do `try-with-resources`.
+-->
+
 ## [não versionado] — 2026-08-30 — Fim do teto de arquivos
 
 O teto de 24 arquivos saiu. Ele estava fazendo o projeto escolher a fronteira
