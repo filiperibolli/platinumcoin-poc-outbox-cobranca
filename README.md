@@ -163,7 +163,7 @@ projeto inteiro.
 ## Como rodar
 
 ```bash
-# testes — sobem Postgres e LocalStack sozinhos (Testcontainers), sem o Compose
+# testes — sobem Postgres, LocalStack e o SFTP sozinhos (Testcontainers), sem o Compose
 mvn test
 
 # ambiente local — schema, fila e bucket prontos, zero passo manual
@@ -172,7 +172,7 @@ docker compose -f infra/docker-compose.yml up
 
 Só é preciso ter Docker rodando. `mvn test` **não** depende do Compose e o
 Compose não depende dos testes; os dois aplicam os mesmos scripts de
-`infra/init/`.
+`infra/init/` e sobem o mesmo servidor SFTP, com as mesmas credenciais.
 
 ### Ver o ciclo inteiro rodar
 
@@ -197,7 +197,7 @@ o retorno duplicado que afeta **zero** linhas, o silêncio que vira
 [ciclo]    C-1 MONTADO — 5 tentativas ABERTO → SOLICITADO (banco 341, 2026-08-31)
 [remessa]  C-1 5 detalhes, sha256=588b15cc7805f50a6fa343f92ebc12edcb3aafd6117820c60197322549643988
 [artefato] remessa/341/20260831/C-1.rem — 282 bytes no S3 (regerada: idêntica, objeto: idêntico)
-[envia]    C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (transporte fora de escopo)
+[envia]    C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (341-20260831-C-1.rem no SFTP do parceiro)
 [retorno]  T-1 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
 [fatura]   F-1 ABERTA → PAGA
 [outbox]   F-1 + PENDENTE (chaveDedup=F-1) — na MESMA transação da fatura
@@ -429,10 +429,10 @@ src/main/java/...
 src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
 
-Os pacotes `api/http`, `simulador/` e o painel são os steps 10–12; `infra/canal`
-e a coleta do retorno são os steps 08–09. O armazenamento no S3 já existe — é o
-step-07. Ver [PLAN.md](PLAN.md) para o que já está escrito e o que ainda é
-plano.
+Os pacotes `api/http`, `simulador/` e o painel são os steps 10–12; a coleta do
+retorno é o step-09. O armazenamento no S3 e a transmissão por SFTP já existem —
+são os steps 07 e 08. Ver [PLAN.md](PLAN.md) para o que já está escrito e o que
+ainda é plano.
 
 Máquina de estados:
 

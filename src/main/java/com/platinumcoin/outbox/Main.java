@@ -2,6 +2,7 @@ package com.platinumcoin.outbox;
 
 import com.platinumcoin.outbox.api.LinhaRetorno;
 import com.platinumcoin.outbox.domain.exception.FalhaDePersistencia;
+import com.platinumcoin.outbox.domain.model.ChaveArtefato;
 import com.platinumcoin.outbox.domain.model.CicloCobranca;
 import com.platinumcoin.outbox.domain.model.Fatura;
 import com.platinumcoin.outbox.domain.model.LancamentoContabil;
@@ -9,6 +10,7 @@ import com.platinumcoin.outbox.domain.model.RegistroOutbox;
 import com.platinumcoin.outbox.domain.model.Remessa;
 import com.platinumcoin.outbox.domain.model.TentativaDebito;
 import com.platinumcoin.outbox.domain.port.ArmazenamentoArtefato;
+import com.platinumcoin.outbox.domain.port.CanalArquivos;
 import com.platinumcoin.outbox.domain.port.PublicadorLancamento;
 import com.platinumcoin.outbox.domain.port.RepositorioCiclo;
 import com.platinumcoin.outbox.domain.port.RepositorioFatura;
@@ -16,10 +18,12 @@ import com.platinumcoin.outbox.domain.port.RepositorioOutbox;
 import com.platinumcoin.outbox.domain.port.RepositorioTentativa;
 import com.platinumcoin.outbox.domain.port.Transacao;
 import com.platinumcoin.outbox.domain.usecase.AplicarRetornoUseCase;
+import com.platinumcoin.outbox.domain.usecase.EnviarRemessaUseCase;
 import com.platinumcoin.outbox.domain.usecase.FecharCicloUseCase;
 import com.platinumcoin.outbox.domain.usecase.GerarRemessaUseCase;
 import com.platinumcoin.outbox.domain.usecase.MontarCicloUseCase;
 import com.platinumcoin.outbox.domain.usecase.PublicarOutboxUseCase;
+import com.platinumcoin.outbox.infra.canal.CanalArquivosSftp;
 import com.platinumcoin.outbox.infra.config.Ambiente;
 import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
 import com.platinumcoin.outbox.infra.persistence.PublicadorLancamentoSqs;
@@ -94,9 +98,11 @@ public final class Main {
     private final RepositorioOutbox outbox;
     private final PublicadorLancamento publicador;
     private final ArmazenamentoArtefato artefatos;
+    private final CanalArquivos canal;
 
     private final MontarCicloUseCase montar;
     private final GerarRemessaUseCase gerarRemessa;
+    private final EnviarRemessaUseCase enviarRemessa;
     private final AplicarRetornoUseCase aplicarRetorno;
     private final FecharCicloUseCase fecharCiclo;
 
@@ -120,11 +126,13 @@ public final class Main {
         this.outbox = new RepositorioOutboxPostgres(dados);
         this.publicador = new PublicadorLancamentoSqs(sqs, urlDaFila);
         this.artefatos = new ArmazenamentoArtefatoS3(ambiente.s3(), ambiente.bucket());
+        this.canal = new CanalArquivosSftp(ambiente.sftp());
 
         Transacao.Fabrica transacoes = new TransacaoJdbc.Fabrica(dados);
         this.montar = new MontarCicloUseCase(transacoes, ciclos);
         this.gerarRemessa = new GerarRemessaUseCase(
                 transacoes, ciclos, tentativas, faturas, artefatos);
+        this.enviarRemessa = new EnviarRemessaUseCase(transacoes, ciclos, artefatos, canal);
         this.aplicarRetorno = new AplicarRetornoUseCase(transacoes, tentativas, faturas, outbox);
         this.fecharCiclo = new FecharCicloUseCase(transacoes, ciclos);
     }
@@ -191,22 +199,20 @@ public final class Main {
     }
 
     /**
-     * O que a transmissão deixa para trás: tentativas esperando retorno.
+     * A transmissão de verdade: SSH até o parceiro, o artefato do S3 entregue
+     * no diretório dele, e só então o {@code COMMIT} das transições.
      *
-     * <p>{@code EnviarRemessa} não tem classe neste repositório — SFTP e CNAB
-     * 240 são I/O e formato, e estão fora de escopo (ver README). O cenário
-     * começa a interessar depois que o arquivo já foi entregue, e é por isso
-     * que estas duas linhas são {@code UPDATE} direto em vez de use case.
+     * <p>A janela entre o {@code put} e o {@code COMMIT} é a segunda do
+     * projeto, e a única diferença para a do relay é o preço de reexecutar: o
+     * arquivo tem nome derivado do ciclo, então a segunda entrega sobrescreve
+     * a primeira — ver {@code CrashDepoisDoPutTest}.
      */
     private void transmitirAoParceiro() {
-        int enviadas = executar("""
-                UPDATE tentativa_debito SET status = 'ENVIADO_PARCEIRO'
-                 WHERE ciclo_id = ? AND status = 'SOLICITADO'
-                """, CICLO);
-        executar("UPDATE ciclo_cobranca SET status = 'ENVIADO' WHERE id = ?", CICLO);
+        int enviadas = enviarRemessa.executar(CICLO);
+        String nome = ChaveArtefato.nomeDaRemessaNoParceiro(ciclos.buscar(CICLO).orElseThrow());
 
-        linha("envia", "%s %s — %d tentativas SOLICITADO → ENVIADO_PARCEIRO (transporte fora de escopo)"
-                .formatted(CICLO, CicloCobranca.Status.ENVIADO, enviadas));
+        linha("envia", "%s %s — %d tentativas SOLICITADO → ENVIADO_PARCEIRO (%s no SFTP do parceiro)"
+                .formatted(CICLO, CicloCobranca.Status.ENVIADO, enviadas, nome));
     }
 
     private void aplicarOsRetornos() {
@@ -403,7 +409,7 @@ public final class Main {
         }
     }
 
-    /** SQL solto do demo: limpeza e transmissão, que não são operação de negócio. */
+    /** SQL solto do demo: a limpeza inicial, que não é operação de negócio. */
     private int executar(String sql, String... parametros) {
         try (Connection conexao = dados.getConnection();
              PreparedStatement stmt = conexao.prepareStatement(sql)) {

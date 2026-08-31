@@ -3,6 +3,113 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-08] — 2026-08-31 — Envio da remessa por SFTP
+
+A transmissão deixa de ser um `UPDATE` com um comentário dizendo "transporte
+fora de escopo" e vira I/O contra outro host: conexão SSH, arquivo aparecendo no
+diretório do parceiro. Com ela entra a **segunda janela** do projeto — o `put`
+no parceiro acontece antes do `COMMIT` que registra que ele aconteceu, e não
+existe transação que una os dois. É a mesma forma do relay, e o step existe para
+mostrar o que muda: aqui o efeito tem nome, e reexecutar sobrescreve em vez de
+duplicar.
+
+| | relay (05) | envio (08) | remessa (07) |
+|---|---|---|---|
+| efeito externo | mensagem na fila | arquivo no parceiro | objeto no S3 |
+| reexecutar produz | **duplicata** | **sobrescrita** | **sobrescrita** |
+| quem paga | consumidor, via `chaveDedup` | ninguém — o nome é o mesmo | ninguém |
+
+### Adicionado
+
+- **`CanalArquivos`** — `enviar(nome, bytes)`. Um método só: o domínio sabe que
+  existe um outro lado e que deixar um arquivo lá é efeito externo, fora de
+  transação aberta. Ganha a leitura no step-09.
+- **`EnviarRemessaUseCase`** — `get` do artefato → `put` no parceiro → `COMMIT`
+  das transições. Lê o artefato do S3 em vez de regerar a remessa: regerar seria
+  correto, porque a projeção é pura, e ainda assim apagaria a fronteira que o
+  step-07 criou — no dia em que a geração mudar, o enviado e o arquivado
+  divergiriam sem que nada acusasse.
+- **`CanalArquivosSftp`** — `com.hierynomus:sshj`, uma conexão por transmissão.
+  Traduz `IOException` em `FalhaDePublicacao` antes de atravessar a porta, como
+  o publicador do SQS já fazia.
+- **`ChaveArtefato.nomeDaRemessaNoParceiro`** — `{banco}-{dataRef}-{cicloId}.rem`,
+  plano e sem barras. Mora ao lado da chave do S3 porque é a mesma derivação
+  aplicada ao outro lado do fio.
+- **`RepositorioCiclo.registrarEnvio`** — as duas transições numa transação:
+  tentativas `SOLICITADO → ENVIADO_PARCEIRO` e ciclo `MONTADO → ENVIADO`. As
+  guardas por status são o que torna a retransmissão inócua.
+- **`Ambiente.ServidorSftp`** — host, porta, usuário e senha do parceiro, com os
+  mesmos padrões do Compose. Uma descrição de servidor, e não um cliente pronto
+  como os da AWS: a sessão SSH nasce e morre a cada transmissão.
+- **Serviço `sftp` (`atmoz/sftp:alpine`) no Compose**, com `/remessa` e
+  `/retorno`, e o mesmo container subido por Testcontainers na suíte.
+- **`EnvioChegaNoParceiroTest`** (3 testes) e **`CrashDepoisDoPutTest`**
+  (1 teste) — os dois obrigatórios do step. As asserções são feitas do lado do
+  parceiro, por `DiretorioDoParceiro`: outra conexão, outro cliente, listando o
+  diretório e baixando o que está lá.
+- **`simplelogger.properties`** — o handshake do sshj em `warn`. O cenário do
+  `Main` é a saída do programa, e uma dezena de linhas INFO por transmissão a
+  afogaria.
+
+### Decisões
+
+- **O nome no destino é derivado do ciclo, não sufixado por tentativa.** A
+  alternativa (`...-1.rem`, `...-2.rem`) deixaria o parceiro decidir qual dos
+  dois arquivos vale, transferindo para fora um problema que é nosso.
+- **O nome determinístico não fecha a janela.** Ele torna o efeito da
+  reexecução idempotente por conteúdo. O parceiro que já leu o arquivo antes da
+  sobrescrita processa duas vezes — e quem absorve isso é o `UPDATE` condicional
+  do step-03, não o SFTP.
+- **A transição é do ciclo inteiro.** Um arquivo é um evento: ou o parceiro
+  recebeu a remessa, ou não recebeu. Não existe meia transmissão a registrar, e
+  por isso não há `registrarEnvio` por tentativa.
+- **`registrarEnvio` tem guarda de status, ao contrário de `registrarRemessa`.**
+  A diferença é o que está sendo escrito: chave e hash de um artefato imutável
+  podem ser regravados iguais; estado de tentativa, não — sem a guarda, uma
+  retransmissão devolveria a `ENVIADO_PARCEIRO` uma tentativa que o retorno já
+  resolveu.
+- **SFTP de verdade, não um `Path` local fingindo de canal.** Um diretório local
+  não tem latência, não tem arquivo visível pela metade e não tem conexão que
+  cai no meio do `put` — e é disso que o step-09 precisa para provar a
+  quiescência.
+- **`PromiscuousVerifier` no lugar de `known_hosts`.** O outro lado é um
+  container que nasce com chave nova a cada execução; verificar o que não existe
+  seria teatro. Contra um parceiro real, esta é a linha que mudaria.
+- **O `Main` passa a transmitir de verdade.** Ele imprimia
+  "transporte fora de escopo", e isso deixou de ser verdade neste step. O
+  `Cenario` dos testes de retorno continua com `UPDATE` direto de propósito:
+  aqueles testes começam depois da entrega, e fazê-los abrir conexão SSH só para
+  chegar ao estado inicial trocaria o sujeito deles.
+
+### Verificado
+
+- `mvn test` → 52 testes, 0 falhas (48 dos steps anteriores, 4 deste).
+- `docker compose up -d` + `mvn compile exec:java` → o cenário roda contra o
+  Compose e imprime
+  `[envia] C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (341-20260831-C-1.rem no SFTP do parceiro)`.
+  `docker exec outbox-sftp ls -l /home/parceiro/remessa` mostra o arquivo com os
+  282 bytes do artefato do S3.
+- `CrashDepoisDoPutTest` assere **1** arquivo no destino depois da reexecução, e
+  os mesmos bytes da primeira entrega — a janela está documentada, não
+  eliminada.
+- `FundacaoTest.dominioIsolado` continua verde: nenhum import de biblioteca SSH
+  em `domain/`.
+
+AI: est 2h / actual 40min / ~95% generated / 1 issue caught in review
+
+<!--
+O 1: o `Main` e o `Cenario` continuavam com o comentário "transporte fora de
+escopo" depois de o transporte existir. Um comentário que descreve um limite do
+projeto envelhece junto com o limite, e este envelheceu no mesmo commit que o
+criou.
+
+Dois erros de compilação no caminho, os dois do mesmo tipo do step-07: os
+decoradores de `RepositorioCiclo` nos testes antigos pararam de compilar quando
+a porta ganhou `registrarEnvio`. Uma porta que cresce cobra de todo mundo que a
+implementa — e o compilador cobra na hora, que é a diferença entre uma porta e
+um mapa de strings.
+-->
+
 ## [step-07] — 2026-08-31 — Remessa durável no S3
 
 Gerar e transmitir deixam de ser o mesmo instante. A remessa passa a existir

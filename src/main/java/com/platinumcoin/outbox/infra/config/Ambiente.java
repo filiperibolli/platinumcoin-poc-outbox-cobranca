@@ -12,8 +12,8 @@ import java.net.URI;
 import java.util.function.UnaryOperator;
 
 /**
- * Onde o programa descobre com que banco, com que fila e com que bucket ele
- * fala.
+ * Onde o programa descobre com que banco, com que fila, com que bucket e com
+ * que parceiro ele fala.
  *
  * <p>É o único lugar que lê configuração. Os repositórios recebem um
  * {@link DataSource} pronto, o publicador recebe um {@link SqsClient} pronto e
@@ -31,15 +31,27 @@ public final class Ambiente {
     private final S3Client s3;
     private final String nomeDaFila;
     private final String bucket;
+    private final ServidorSftp sftp;
     private String urlDaFila;
 
     private Ambiente(DataSource dados, SqsClient sqs, S3Client s3,
-                     String nomeDaFila, String bucket) {
+                     String nomeDaFila, String bucket, ServidorSftp sftp) {
         this.dados = dados;
         this.sqs = sqs;
         this.s3 = s3;
         this.nomeDaFila = nomeDaFila;
         this.bucket = bucket;
+        this.sftp = sftp;
+    }
+
+    /**
+     * Com que servidor SFTP o canal fala.
+     *
+     * <p>Uma descrição de servidor, e não um cliente pronto como o do SQS e o
+     * do S3: a sessão SSH é aberta e fechada a cada transmissão, então não há
+     * objeto de longa vida para montar aqui.
+     */
+    public record ServidorSftp(String host, int porta, String usuario, String senha) {
     }
 
     /** O ambiente do processo — o que o {@code Main} usa. */
@@ -90,9 +102,16 @@ public final class Ambiente {
                 .forcePathStyle(true)
                 .build();
 
+        ServidorSftp parceiro = new ServidorSftp(
+                valor(variaveis, "SFTP_HOST", "localhost"),
+                Integer.parseInt(valor(variaveis, "SFTP_PORTA", "2222")),
+                valor(variaveis, "SFTP_USUARIO", "parceiro"),
+                valor(variaveis, "SFTP_SENHA", "parceiro"));
+
         return new Ambiente(fonte, sqs, s3,
                 valor(variaveis, "FILA", "lancamentos-contabeis"),
-                valor(variaveis, "BUCKET", "cobranca-artefatos"));
+                valor(variaveis, "BUCKET", "cobranca-artefatos"),
+                parceiro);
     }
 
     public DataSource dados() {
@@ -110,6 +129,11 @@ public final class Ambiente {
     /** O bucket dos artefatos do ciclo: remessas e, no step-09, retornos. */
     public String bucket() {
         return bucket;
+    }
+
+    /** O parceiro que recebe a remessa e devolve o retorno. */
+    public ServidorSftp sftp() {
+        return sftp;
     }
 
     /**
