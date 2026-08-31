@@ -1,10 +1,19 @@
 package com.platinumcoin.outbox;
 
+import com.platinumcoin.outbox.api.ArquivoRetorno;
 import com.platinumcoin.outbox.domain.port.ArmazenamentoArtefato;
 import com.platinumcoin.outbox.domain.port.CanalArquivos;
+import com.platinumcoin.outbox.domain.port.Transacao;
+import com.platinumcoin.outbox.domain.usecase.AplicarRetornoUseCase;
+import com.platinumcoin.outbox.domain.usecase.ColetarRetornoUseCase;
 import com.platinumcoin.outbox.infra.canal.CanalArquivosSftp;
 import com.platinumcoin.outbox.infra.config.Ambiente;
 import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
+import com.platinumcoin.outbox.infra.persistence.RepositorioArquivoRetornoPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioFaturaPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioOutboxPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioTentativaPostgres;
+import com.platinumcoin.outbox.infra.persistence.TransacaoJdbc;
 import org.junit.jupiter.api.BeforeAll;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -24,6 +33,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +57,18 @@ public abstract class AmbienteDeTeste {
     protected static final String SENHA_SFTP = "parceiro";
     /** O diretório do parceiro onde a remessa é deixada — contrato, não configuração. */
     protected static final String DIRETORIO_REMESSA = "/remessa";
+    /** E aquele de onde o retorno é recolhido. */
+    protected static final String DIRETORIO_RETORNO = "/retorno";
+
+    /**
+     * O intervalo entre as duas leituras de atributos na suíte.
+     *
+     * <p>Curto porque o teste não espera de verdade: quem faz o arquivo crescer
+     * entre as leituras é um decorador do canal, não o relógio. Em produção
+     * seriam minutos — e é por isso que o intervalo é parâmetro do use case, não
+     * constante dentro dele.
+     */
+    protected static final Duration QUIESCENCIA = Duration.ofMillis(50);
 
     private static final Path SCHEMA_SQL = Path.of("infra", "init", "02-postgres.sql");
     private static final Path INIT_LOCALSTACK = Path.of("infra", "init", "01-localstack.sh");
@@ -164,6 +186,31 @@ public abstract class AmbienteDeTeste {
         return new CanalArquivosSftp(ambiente().sftp());
     }
 
+    /**
+     * A coleta inteira, fiada como em produção, sobre o canal informado.
+     *
+     * <p>Recebe o canal em vez de construí-lo porque é ali que os testes do
+     * step-09 intervêm: o arquivo que cresce entre as duas leituras nasce de um
+     * decorador de {@link CanalArquivos}, e não de uma espera cronometrada.
+     *
+     * <p>O aplicador é o {@code AplicarRetornoUseCase} de verdade — a coleta não
+     * decide estado de tentativa nenhuma, e um aplicador de mentira aqui
+     * esconderia justamente a parte que o step-03 provou.
+     */
+    protected static ColetarRetornoUseCase coletaCom(CanalArquivos canal) {
+        Transacao.Fabrica transacoes = new TransacaoJdbc.Fabrica(dados());
+        return new ColetarRetornoUseCase(
+                canal,
+                artefatos(),
+                new RepositorioArquivoRetornoPostgres(dados()),
+                ArquivoRetorno::de,
+                new AplicarRetornoUseCase(transacoes,
+                        new RepositorioTentativaPostgres(dados()),
+                        new RepositorioFaturaPostgres(dados()),
+                        new RepositorioOutboxPostgres(dados())),
+                QUIESCENCIA);
+    }
+
     protected static String urlDaFila() {
         return ambiente().urlDaFila();
     }
@@ -207,7 +254,8 @@ public abstract class AmbienteDeTeste {
     /** Zera o estado entre testes sem derrubar os containers. */
     protected static void limparTabelas() throws SQLException {
         try (Connection conexao = novaConexao(); Statement stmt = conexao.createStatement()) {
-            stmt.execute("TRUNCATE outbox, tentativa_debito, ciclo_cobranca, fatura RESTART IDENTITY CASCADE");
+            stmt.execute("TRUNCATE arquivo_retorno, outbox, tentativa_debito, ciclo_cobranca,"
+                    + " fatura RESTART IDENTITY CASCADE");
         }
     }
 }

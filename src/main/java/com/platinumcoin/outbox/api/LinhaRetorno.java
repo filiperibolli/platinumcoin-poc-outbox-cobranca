@@ -12,9 +12,10 @@ import com.platinumcoin.outbox.domain.usecase.AplicarRetornoUseCase;
  * conhecê-la: a seta é {@code api → domain}, nunca o contrário — a mesma
  * fronteira que {@code FundacaoTest.dominioIsolado} verifica.
  *
- * <p>Quem produz estas linhas — o coletor que baixa o arquivo e o interpreta —
- * não tem classe neste repositório: SFTP e CNAB 240 são I/O e formato, e estão
- * fora de escopo. O step-03 começa depois que o arquivo já foi lido.
+ * <p>Quem produz estas linhas é {@link ArquivoRetorno}, desde o step-09: o
+ * parser do layout posicional, alimentado pelo coletor que baixa o arquivo do
+ * parceiro. Até ali elas eram construídas à mão, porque o step-03 começa depois
+ * que o arquivo já foi lido — e continua começando.
  */
 public record LinhaRetorno(String tentativaId,
                            TentativaDebito.Status resultado,
