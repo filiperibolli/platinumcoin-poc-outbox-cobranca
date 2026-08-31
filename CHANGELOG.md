@@ -3,6 +3,71 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-04] — 2026-08-31 — Fechamento de ciclo
+
+O passo que fecha a janela de retorno sem inventar resposta para quem não
+respondeu. É o único lugar do projeto onde o estado de uma tentativa muda sem
+que ninguém tenha afirmado nada — e por isso o estado que ele escreve tem nome
+próprio.
+
+### Adicionado
+
+- **`FecharCicloUseCase`** — numa transação, leva a `SEM_RETORNO` tudo o que
+  continua `ENVIADO_PARCEIRO` no ciclo e marca o ciclo como `FECHADO`. Devolve
+  quantas tentativas ficaram sem retorno; zero num ciclo já fechado.
+- **`RepositorioCicloPostgres.fechar`** — os dois `UPDATE`, com a guarda
+  `AND status = 'ENVIADO_PARCEIRO'` no primeiro. Era o último método declarado
+  e não implementado do repositório de ciclo.
+- **`FechamentoNaoInventaResultadoTest`** — 4 testes: o fechamento com um
+  pagamento e dois silêncios, a ausência de motivo em `SEM_RETORNO`, o retorno
+  atrasado que chega depois do fechamento, e o refechamento inócuo.
+
+### Decisões
+
+- **Silêncio não é resposta.** `NAO_PAGO` é uma afirmação do parceiro e vem com
+  motivo; a ausência de retorno não tem motivo porque não houve fato. A
+  diferença é visível para o cliente: `NAO_PAGO` dispara notificação de falha de
+  débito, `SEM_RETORNO` é exceção operacional que alguém investiga. Colapsar os
+  dois economiza um estado e mente para o cliente.
+- **A idempotência do fechamento é a mesma do retorno.** A guarda está no
+  `UPDATE` das tentativas — `AND status = 'ENVIADO_PARCEIRO'` — e não no
+  `UPDATE` do ciclo. Guardar o ciclo por `status = 'ENVIADO'` faria o
+  refechamento parecer seguro pelo motivo errado e deixaria um ciclo ainda
+  `MONTADO` impossível de fechar. Quem já tem desfecho não é tocado, venha o
+  segundo fechamento de onde vier.
+- **O fechamento não toca no outbox, e nem precisa de um `if` para isso.**
+  Nenhum dos estados que ele escreve é um pagamento, e a pergunta
+  `geraLancamentoContabil()` continua com um dono só — por isso
+  `RepositorioOutbox` não aparece no construtor do use case.
+- **`executar` devolve um `int`, e não um record de resultado.** "Quantas
+  ficaram sem retorno" é a resposta inteira; um record de um campo só seria um
+  arquivo a mais que muda código de lugar.
+
+### Verificado
+
+- `mvn test` → 27 testes, 0 falhas (23 dos steps anteriores, 4 deste).
+- `FechamentoNaoInventaResultadoTest`: com 3 tentativas transmitidas e 1 retorno
+  `PAGO`, o fechamento deixa **1** `PAGO`, **2** `SEM_RETORNO`, **0**
+  `NAO_PAGO` e **1** linha no outbox, com o ciclo em `FECHADO`; nenhuma
+  tentativa `SEM_RETORNO` ganha motivo; o retorno que chega depois do
+  fechamento é `IGNORADO` e não reabre a tentativa; o segundo fechamento devolve
+  0 e não altera nada.
+- **Teste de mutação manual**, duas vezes. Sem a guarda
+  `AND status = 'ENVIADO_PARCEIRO'`, o fechamento sobrescreve o `PAGO` e 2 dos 4
+  testes falham. Trocando `SEM_RETORNO` por `NAO_PAGO`, os 4 estouram na
+  constraint `tentativa_motivo_so_com_nao_pago`: a recusa inventada é recusada
+  pelo schema antes de chegar ao teste.
+
+AI: est 1h / actual 20min / ~95% generated / 1 issue caught in review
+
+<!--
+A 1: o step-04.md escreve o `UPDATE ciclo_cobranca ... WHERE id = ?` sem guarda
+e, na Definition of Done, pede que refechar não altere nada — o que só fecha
+porque a guarda mora no `UPDATE` das tentativas. A leitura oposta (guardar o
+ciclo por `status = 'ENVIADO'`) passaria no teste de refechamento pelo motivo
+errado e deixaria um ciclo ainda `MONTADO` sem como fechar.
+-->
+
 ## [step-03] — 2026-08-31 — Aplicar retorno
 
 A transação que decide **e** registra a intenção de publicar. É o step que o
