@@ -56,10 +56,16 @@
   </dependencyManagement>
 
   <dependencies>
-    <!-- Teto de infra: Postgres + UM serviço AWS. Só o cliente de SQS. -->
+    <!-- Teto de infra: Postgres + SQS + S3 (LocalStack) + SFTP. Nada além, e
+         não sobe de novo sem ADR — o S3 entrou pelo ADR-0003. Clientes
+         avulsos, e não o bundle: o bundle traz o SDK inteiro. -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sqs</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
     </dependency>
 
     <dependency>

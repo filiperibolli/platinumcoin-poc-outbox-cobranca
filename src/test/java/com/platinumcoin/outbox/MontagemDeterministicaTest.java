@@ -1,6 +1,7 @@
 package com.platinumcoin.outbox;
 
 import com.platinumcoin.outbox.domain.exception.FalhaDePersistencia;
+import com.platinumcoin.outbox.domain.model.ChaveArtefato;
 import com.platinumcoin.outbox.domain.model.CicloCobranca;
 import com.platinumcoin.outbox.domain.model.TentativaDebito;
 import com.platinumcoin.outbox.domain.port.RepositorioCiclo;
@@ -158,6 +159,12 @@ class MontagemDeterministicaTest extends AmbienteDeTeste {
         @Override
         public int atribuirTentativasAbertas(Transacao tx, CicloCobranca ciclo) {
             throw new FalhaDePersistencia("banco caiu no meio da montagem");
+        }
+
+        @Override
+        public void registrarRemessa(Transacao tx, String cicloId,
+                                     ChaveArtefato chave, String sha256) {
+            real.registrarRemessa(tx, cicloId, chave, sha256);
         }
 
         @Override

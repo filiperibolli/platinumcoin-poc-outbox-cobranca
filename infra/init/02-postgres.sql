@@ -18,11 +18,25 @@ CREATE TABLE ciclo_cobranca (
     data_ref DATE NOT NULL,
     status   TEXT NOT NULL CHECK (status IN ('MONTADO', 'ENVIADO', 'FECHADO')),
 
+    -- Onde está o artefato de remessa deste ciclo, e que bytes ele tinha.
+    -- Nulos até a geração commitar: o objeto vai para o S3 ANTES do COMMIT, e
+    -- morrer entre um e outro deixa exatamente este estado — objeto órfão,
+    -- ciclo sem chave. É inofensivo porque a chave é determinística e o
+    -- conteúdo é função pura do ciclo: a reexecução sobrescreve os mesmos bytes.
+    -- DECISÃO: chave determinística derivada do ciclo — ver ADR-0003
+    remessa_chave  TEXT,
+    remessa_sha256 TEXT,
+
     -- Reexecutar a montagem é seguro POR CONSTRUÇÃO: a segunda tentativa
     -- esbarra aqui, em vez de depender de alguém ter conferido antes se o ciclo
     -- já existia. Verificação prévia é uma corrida; constraint é um fato.
     -- DECISÃO: idempotência por constraint, não por consulta prévia — ver step-02
-    CONSTRAINT ciclo_um_por_banco_e_data UNIQUE (banco, data_ref)
+    CONSTRAINT ciclo_um_por_banco_e_data UNIQUE (banco, data_ref),
+
+    -- Chave e hash são a mesma afirmação: "a remessa é aquele objeto, e o
+    -- conteúdo dele era este". Uma sem a outra é meia resposta.
+    CONSTRAINT ciclo_remessa_chave_com_hash
+        CHECK ((remessa_chave IS NULL) = (remessa_sha256 IS NULL))
 );
 
 -- N tentativas por fatura. O banco reapresenta o débito quando não paga.

@@ -1,6 +1,7 @@
 package com.platinumcoin.outbox.infra.persistence;
 
 import com.platinumcoin.outbox.domain.exception.FalhaDePersistencia;
+import com.platinumcoin.outbox.domain.model.ChaveArtefato;
 import com.platinumcoin.outbox.domain.model.CicloCobranca;
 import com.platinumcoin.outbox.domain.port.RepositorioCiclo;
 import com.platinumcoin.outbox.domain.port.Transacao;
@@ -16,6 +17,9 @@ import java.util.Optional;
 
 /** {@link RepositorioCiclo} em JDBC puro. */
 public final class RepositorioCicloPostgres implements RepositorioCiclo {
+
+    private static final String COLUNAS =
+            "id, banco, data_ref, status, remessa_chave, remessa_sha256";
 
     /** Violação de unicidade no Postgres. */
     private static final String CHAVE_DUPLICADA = "23505";
@@ -52,9 +56,7 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
 
     @Override
     public Optional<CicloCobranca> buscar(String cicloId) {
-        String sql = """
-                SELECT id, banco, data_ref, status FROM ciclo_cobranca WHERE id = ?
-                """;
+        String sql = "SELECT %s FROM ciclo_cobranca WHERE id = ?".formatted(COLUNAS);
         try (Connection conexao = fonte.getConnection();
              PreparedStatement stmt = conexao.prepareStatement(sql)) {
             stmt.setString(1, cicloId);
@@ -67,9 +69,8 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
     @Override
     public Optional<CicloCobranca> buscarPor(String banco, LocalDate dataRef) {
         String sql = """
-                SELECT id, banco, data_ref, status FROM ciclo_cobranca
-                 WHERE banco = ? AND data_ref = ?
-                """;
+                SELECT %s FROM ciclo_cobranca WHERE banco = ? AND data_ref = ?
+                """.formatted(COLUNAS);
         try (Connection conexao = fonte.getConnection();
              PreparedStatement stmt = conexao.prepareStatement(sql)) {
             stmt.setString(1, banco);
@@ -95,6 +96,27 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
         } catch (SQLException e) {
             throw new FalhaDePersistencia(
                     "falha ao atribuir tentativas ao ciclo " + ciclo.id(), e);
+        }
+    }
+
+    @Override
+    public void registrarRemessa(Transacao tx, String cicloId, ChaveArtefato chave, String sha256) {
+        // Sem guarda de status: a chave é determinística e o conteúdo é função
+        // pura do ciclo, então uma segunda geração grava exatamente os mesmos
+        // dois valores. Guardar contra a reexecução seria proteger contra o
+        // caso que este step existe para mostrar como inofensivo.
+        String sql = """
+                UPDATE ciclo_cobranca SET remessa_chave = ?, remessa_sha256 = ? WHERE id = ?
+                """;
+        try (PreparedStatement stmt = TransacaoJdbc.conexaoDe(tx).prepareStatement(sql)) {
+            stmt.setString(1, chave.valor());
+            stmt.setString(2, sha256);
+            stmt.setString(3, cicloId);
+            if (stmt.executeUpdate() == 0) {
+                throw new FalhaDePersistencia("ciclo inexistente ao registrar a remessa: " + cicloId);
+            }
+        } catch (SQLException e) {
+            throw new FalhaDePersistencia("falha ao registrar a remessa do ciclo " + cicloId, e);
         }
     }
 
@@ -129,11 +151,14 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
             if (!rs.next()) {
                 return Optional.empty();
             }
+            String chave = rs.getString("remessa_chave");
             return Optional.of(new CicloCobranca(
                     rs.getString("id"),
                     rs.getString("banco"),
                     rs.getDate("data_ref").toLocalDate(),
-                    CicloCobranca.Status.valueOf(rs.getString("status"))));
+                    CicloCobranca.Status.valueOf(rs.getString("status")),
+                    chave == null ? null : new ChaveArtefato(chave),
+                    rs.getString("remessa_sha256")));
         }
     }
 }

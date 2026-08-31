@@ -1,5 +1,6 @@
 package com.platinumcoin.outbox.domain.port;
 
+import com.platinumcoin.outbox.domain.model.ChaveArtefato;
 import com.platinumcoin.outbox.domain.model.CicloCobranca;
 
 import java.time.LocalDate;
@@ -34,6 +35,19 @@ public interface RepositorioCiclo {
      * @return quantas tentativas entraram no ciclo.
      */
     int atribuirTentativasAbertas(Transacao tx, CicloCobranca ciclo);
+
+    /**
+     * Registra no ciclo o artefato de remessa já gravado: onde ele está e que
+     * bytes ele tinha.
+     *
+     * <p>É o {@code COMMIT} que fecha a ordem {@code projeta → put → COMMIT}.
+     * Sem guarda de status, e por isso mesmo: a chave é determinística e o
+     * conteúdo é função pura do ciclo, então uma segunda geração escreve
+     * exatamente os mesmos dois valores. Guardar contra a reexecução seria
+     * proteger contra o caso que este step existe para mostrar como inofensivo.
+     * <br>DECISÃO: chave determinística derivada do ciclo — ver ADR-0003
+     */
+    void registrarRemessa(Transacao tx, String cicloId, ChaveArtefato chave, String sha256);
 
     /**
      * Fecha o ciclo: o que continua {@code ENVIADO_PARCEIRO} vira

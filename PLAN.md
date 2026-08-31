@@ -45,7 +45,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   quarta, `F-4`.
   Teste: `CenarioPontaAPontaTest`.
 
-- [ ] **step-07 — Remessa no S3** · [docs/steps/step-07.md](docs/steps/step-07.md)
+- [x] **step-07 — Remessa no S3** · [docs/steps/step-07.md](docs/steps/step-07.md)
   Separa geração de transmissão, com artefato durável entre as duas.
   `ArmazenamentoArtefato` (put/get/existe) e chave determinística derivada do
   ciclo. Layout posicional de largura fixa: header, N detalhes com
