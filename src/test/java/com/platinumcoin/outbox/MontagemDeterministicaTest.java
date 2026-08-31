@@ -168,6 +168,11 @@ class MontagemDeterministicaTest extends AmbienteDeTeste {
         }
 
         @Override
+        public int registrarEnvio(Transacao tx, String cicloId) {
+            return real.registrarEnvio(tx, cicloId);
+        }
+
+        @Override
         public int fechar(Transacao tx, String cicloId) {
             return real.fechar(tx, cicloId);
         }

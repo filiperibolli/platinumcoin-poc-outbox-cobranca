@@ -1,9 +1,12 @@
 package com.platinumcoin.outbox;
 
 import com.platinumcoin.outbox.domain.port.ArmazenamentoArtefato;
+import com.platinumcoin.outbox.domain.port.CanalArquivos;
+import com.platinumcoin.outbox.infra.canal.CanalArquivosSftp;
 import com.platinumcoin.outbox.infra.config.Ambiente;
 import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
 import org.junit.jupiter.api.BeforeAll;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -26,8 +29,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Base dos testes: sobe Postgres e LocalStack (SQS e S3) e aplica os MESMOS
- * scripts de init que o {@code docker compose} usa.
+ * Base dos testes: sobe Postgres, LocalStack (SQS e S3) e o SFTP do parceiro,
+ * e aplica os MESMOS scripts de init que o {@code docker compose} usa.
  *
  * <p>Reaproveitar os scripts não é economia de digitação — é o que garante que
  * um teste verde signifique alguma coisa. Um schema de teste escrito à parte
@@ -40,6 +43,10 @@ public abstract class AmbienteDeTeste {
 
     protected static final String NOME_DA_FILA = "lancamentos-contabeis";
     protected static final String NOME_DO_BUCKET = "cobranca-artefatos";
+    protected static final String USUARIO_SFTP = "parceiro";
+    protected static final String SENHA_SFTP = "parceiro";
+    /** O diretório do parceiro onde a remessa é deixada — contrato, não configuração. */
+    protected static final String DIRETORIO_REMESSA = "/remessa";
 
     private static final Path SCHEMA_SQL = Path.of("infra", "init", "02-postgres.sql");
     private static final Path INIT_LOCALSTACK = Path.of("infra", "init", "01-localstack.sh");
@@ -61,6 +68,19 @@ public abstract class AmbienteDeTeste {
                     // o teste nem começa.
                     .waitingFor(Wait.forLogMessage(".*bucket " + NOME_DO_BUCKET + " criado.*\\n", 1));
 
+    /**
+     * O parceiro: um servidor SSH de verdade, com os mesmos diretórios e as
+     * mesmas credenciais do Compose.
+     *
+     * <p>A sintaxe {@code usuario:senha:::dirs} do {@code atmoz/sftp} cria
+     * {@code /remessa} e {@code /retorno} dentro do chroot do usuário.
+     */
+    protected static final GenericContainer<?> SFTP =
+            new GenericContainer<>(DockerImageName.parse("atmoz/sftp:alpine"))
+                    .withExposedPorts(22)
+                    .withCommand(USUARIO_SFTP + ":" + SENHA_SFTP + ":::remessa,retorno")
+                    .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0 port 22.*\\n", 1));
+
     private static Ambiente ambiente;
 
     @BeforeAll
@@ -71,6 +91,9 @@ public abstract class AmbienteDeTeste {
         }
         if (!LOCALSTACK.isRunning()) {
             LOCALSTACK.start();
+        }
+        if (!SFTP.isRunning()) {
+            SFTP.start();
         }
     }
 
@@ -96,17 +119,21 @@ public abstract class AmbienteDeTeste {
      */
     protected static Ambiente ambiente() {
         if (ambiente == null) {
-            ambiente = Ambiente.de(Map.of(
-                    "DB_URL", POSTGRES.getJdbcUrl(),
-                    "DB_USUARIO", POSTGRES.getUsername(),
-                    "DB_SENHA", POSTGRES.getPassword(),
-                    "SQS_ENDPOINT", LOCALSTACK.getEndpoint().toString(),
-                    "S3_ENDPOINT", LOCALSTACK.getEndpoint().toString(),
-                    "AWS_REGIAO", LOCALSTACK.getRegion(),
-                    "AWS_CHAVE", LOCALSTACK.getAccessKey(),
-                    "AWS_SEGREDO", LOCALSTACK.getSecretKey(),
-                    "FILA", NOME_DA_FILA,
-                    "BUCKET", NOME_DO_BUCKET)::get);
+            ambiente = Ambiente.de(Map.ofEntries(
+                    Map.entry("DB_URL", POSTGRES.getJdbcUrl()),
+                    Map.entry("DB_USUARIO", POSTGRES.getUsername()),
+                    Map.entry("DB_SENHA", POSTGRES.getPassword()),
+                    Map.entry("SQS_ENDPOINT", LOCALSTACK.getEndpoint().toString()),
+                    Map.entry("S3_ENDPOINT", LOCALSTACK.getEndpoint().toString()),
+                    Map.entry("AWS_REGIAO", LOCALSTACK.getRegion()),
+                    Map.entry("AWS_CHAVE", LOCALSTACK.getAccessKey()),
+                    Map.entry("AWS_SEGREDO", LOCALSTACK.getSecretKey()),
+                    Map.entry("FILA", NOME_DA_FILA),
+                    Map.entry("BUCKET", NOME_DO_BUCKET),
+                    Map.entry("SFTP_HOST", SFTP.getHost()),
+                    Map.entry("SFTP_PORTA", String.valueOf(SFTP.getMappedPort(22))),
+                    Map.entry("SFTP_USUARIO", USUARIO_SFTP),
+                    Map.entry("SFTP_SENHA", SENHA_SFTP))::get);
         }
         return ambiente;
     }
@@ -130,6 +157,11 @@ public abstract class AmbienteDeTeste {
     /** O armazenamento que a infra recebe — o mesmo que o {@code Main} usa. */
     protected static ArmazenamentoArtefato artefatos() {
         return new ArmazenamentoArtefatoS3(s3(), ambiente().bucket());
+    }
+
+    /** O canal que a infra recebe — o mesmo que o {@code Main} usa. */
+    protected static CanalArquivos canal() {
+        return new CanalArquivosSftp(ambiente().sftp());
     }
 
     protected static String urlDaFila() {

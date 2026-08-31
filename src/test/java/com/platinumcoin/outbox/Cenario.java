@@ -66,9 +66,10 @@ final class Cenario {
      * arquivo de retorno as encontra.
      *
      * <p>A montagem usa o use case de verdade. A transmissão é {@code UPDATE}
-     * direto porque {@code EnviarRemessa} não tem classe neste repositório —
-     * SFTP e CNAB 240 estão fora de escopo, e o retorno começa depois que o
-     * arquivo já foi entregue.
+     * direto de propósito: o caminho real está em {@code EnviarRemessaUseCase}
+     * e é exercitado por {@code EnvioChegaNoParceiroTest}. Estes testes começam
+     * depois que o arquivo já foi entregue, e fazê-los gerar remessa e abrir
+     * conexão SSH só para chegar ao estado inicial trocaria o sujeito deles.
      */
     static void cicloTransmitido(String cicloId) {
         cicloTransmitido(cicloId, DATA);

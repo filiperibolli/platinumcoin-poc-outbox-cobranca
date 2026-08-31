@@ -52,7 +52,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   `id_tentativa` em posição fixa, trailer com a contagem.
   Testes: `RemessaDeterministicaTest`, `RemessaSobreviveAReexecucaoTest`.
 
-- [ ] **step-08 — Envio por SFTP** · [docs/steps/step-08.md](docs/steps/step-08.md)
+- [x] **step-08 — Envio por SFTP** · [docs/steps/step-08.md](docs/steps/step-08.md)
   `EnviarRemessaUseCase` lê o artefato do S3 e transmite por SSH de verdade
   (`atmoz/sftp`). Nome determinístico no destino: reenvio sobrescreve.
   A janela `put` → `COMMIT` fica marcada no código, não escondida.

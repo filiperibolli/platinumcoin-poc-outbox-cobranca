@@ -40,3 +40,13 @@ services:
       interval: 3s
       timeout: 5s
       retries: 30
+
+  # O parceiro: um servidor SFTP de verdade, com os dois diretórios do ciclo.
+  # A sintaxe `usuario:senha:::dirs` do atmoz/sftp cria /remessa e /retorno
+  # dentro do chroot do usuário — do lado do cliente eles são a raiz.
+  sftp:
+    image: atmoz/sftp:alpine
+    container_name: outbox-sftp
+    command: parceiro:parceiro:::remessa,retorno
+    ports:
+      - "2222:22"

@@ -121,6 +121,32 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
     }
 
     @Override
+    public int registrarEnvio(Transacao tx, String cicloId) {
+        // As duas guardas de status são o que absorve a retransmissão que a
+        // janela entre o put e o COMMIT produz: a tentativa que já saiu não sai
+        // de novo, e o ciclo já ENVIADO não volta atrás.
+        String transmitidas = """
+                UPDATE tentativa_debito SET status = 'ENVIADO_PARCEIRO'
+                 WHERE ciclo_id = ? AND status = 'SOLICITADO'
+                """;
+        String ciclo = """
+                UPDATE ciclo_cobranca SET status = 'ENVIADO'
+                 WHERE id = ? AND status = 'MONTADO'
+                """;
+        Connection conexao = TransacaoJdbc.conexaoDe(tx);
+        try (PreparedStatement tentativas = conexao.prepareStatement(transmitidas);
+             PreparedStatement enviado = conexao.prepareStatement(ciclo)) {
+            tentativas.setString(1, cicloId);
+            int afetadas = tentativas.executeUpdate();
+            enviado.setString(1, cicloId);
+            enviado.executeUpdate();
+            return afetadas;
+        } catch (SQLException e) {
+            throw new FalhaDePersistencia("falha ao registrar o envio do ciclo " + cicloId, e);
+        }
+    }
+
+    @Override
     public int fechar(Transacao tx, String cicloId) {
         // DECISÃO: ausência de retorno vira SEM_RETORNO, não NAO_PAGO — marcar
         // como não pago dispararia notificação de falha ao cliente com base em

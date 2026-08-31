@@ -50,6 +50,21 @@ public interface RepositorioCiclo {
     void registrarRemessa(Transacao tx, String cicloId, ChaveArtefato chave, String sha256);
 
     /**
+     * Registra que a remessa foi transmitida: as tentativas {@code SOLICITADO}
+     * do ciclo viram {@code ENVIADO_PARCEIRO} e o ciclo {@code MONTADO} vira
+     * {@code ENVIADO}.
+     *
+     * <p>Duas transições, uma transação — um arquivo é um evento: ou o parceiro
+     * recebeu a remessa, ou não recebeu. As guardas por status são o que torna
+     * a retransmissão inócua: quem já está {@code ENVIADO_PARCEIRO} não é
+     * tocado, e a segunda passada afeta zero linhas em vez de reabrir estado
+     * que o retorno já resolveu.
+     *
+     * @return quantas tentativas saíram no arquivo.
+     */
+    int registrarEnvio(Transacao tx, String cicloId);
+
+    /**
      * Fecha o ciclo: o que continua {@code ENVIADO_PARCEIRO} vira
      * {@code SEM_RETORNO}.
      *
