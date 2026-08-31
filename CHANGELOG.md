@@ -3,6 +3,94 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-05] — 2026-08-31 — Relay
+
+A publicação, finalmente — e fora da transação, que é o ponto. Aqui o projeto
+paga o preço que vinha defendendo desde o ADR-0002: duas mensagens para um
+lançamento quando o processo morre no meio, asserido num teste em vez de
+anotado num rodapé.
+
+### Adicionado
+
+- **`PublicarOutboxUseCase`** — `SELECT PENDENTE` → `send` → `UPDATE PUBLICADO`,
+  uma mensagem por vez, nessa ordem. Devolve quantas linhas saíram de
+  `PENDENTE`. Uma falha interrompe a passada e propaga: sem backoff, sem DLQ,
+  sem pular a linha que falhou.
+- **`PublicadorLancamentoSqs`** — AWS SDK v2, fila padrão, `chaveDedup` como
+  atributo da mensagem. Traduz `SdkException` antes que ela atravesse a porta.
+- **`infra/config/Ambiente`** — o único lugar que lê configuração:
+  `DataSource` + `SqsClient` + a url da fila, resolvida tarde. Padrões iguais aos
+  do `docker-compose.yml`.
+- **`domain/exception/FalhaDePublicacao`** — falha de envio separada de falha de
+  banco porque as duas têm consequências diferentes para o relay.
+- **`RepositorioOutboxPostgres.marcarPublicado`** — o `UPDATE ... WHERE id = ?
+  AND status = 'PENDENTE'`, com `publicado_em`. Era o último método declarado e
+  não implementado do projeto.
+- **`infra/persistence/Payload`** — extraído de dentro do repositório de outbox,
+  agora que o publicador precisa do mesmo formato.
+- **`RelayPublicaTest`** (6 testes) e **`CrashDoRelayTest`** (3 testes), mais
+  `AmbienteDeTeste.drenarFila` e `Cenario.pagamentoPendente`.
+
+### Decisões
+
+- **A ordem é a decisão inteira.** Marcar `PUBLICADO` antes de enviar fecha a
+  janela de duplicata e abre a de perda. A duplicata o consumidor descarta pela
+  `chaveDedup`; a mensagem que nunca saiu, numa linha que diz que saiu, ninguém
+  procura. Os dois lados dessa troca estão em `CrashDoRelayTest`, um teste cada.
+- **`Payload` deixou de ser classe interna do repositório.** Se o publicador
+  escrevesse o próprio JSON, o contrato com o consumidor teria duas versões
+  livres para divergirem. Com um dono só, o corpo publicado é byte a byte o que
+  está na coluna `payload` — e o teste assere o texto inteiro, não um `contains`.
+- **`FalhaDePublicacao` em vez de reusar `FalhaDePersistencia`.** Não é purismo
+  de nomes: falha de envio deixa a linha `PENDENTE` sem saber se a mensagem
+  chegou, e falha do banco depois do envio garante republicação. Chamar as duas
+  de "falha de persistência" apagaria a distinção que o ADR-0002 usa como
+  argumento — e o tipo do AWS SDK atravessaria a porta.
+- **O `Ambiente` é a fiação que os testes usam.** Um objeto de configuração
+  exercitado só pelo `Main` seria código morto até o step-06, com a suíte
+  montando `DataSource` e `SqsClient` à parte — a mesma divergência que o
+  `AmbienteDeTeste` evita reaproveitando os scripts de init. Por isso
+  `Ambiente.de(consulta)` recebe de onde ler as variáveis, e o teste aponta a
+  montagem de produção para os containers.
+- **O id que o SQS devolve não vira estado.** É do transporte, não do domínio: o
+  que o relay precisa saber é se a linha saiu de `PENDENTE`, e quem responde isso
+  é o `UPDATE`.
+- **A mensagem é recebida do LocalStack, não conferida num mock.** Um mock
+  provaria que o código chamou o método certo; o que precisa ser provado é que o
+  outro lado tem o que consumir.
+
+### Verificado
+
+- `mvn test` → 36 testes, 0 falhas (27 dos steps anteriores, 9 deste).
+- `RelayPublicaTest`: a linha vira `PUBLICADO` com `publicado_em` preenchido e a
+  mensagem **chega na fila** — corpo igual ao da coluna `payload` e atributo
+  `chaveDedup` = `FAT-1`; a segunda passada não republica; o limite recorta a
+  passada e a mais antiga sai primeiro; marcar de novo afeta **zero** linhas e
+  não reescreve `publicado_em`.
+- `CrashDoRelayTest`: morrendo entre o `send` e o `UPDATE`, a linha continua
+  `PENDENTE` e a passada seguinte republica — **2 mensagens na fila, 1 única
+  `chaveDedup`, corpos idênticos**. No caminho oposto, a falha de envio não marca
+  nada e não perde nada: fila vazia, linha pendente, e a passada seguinte publica
+  uma vez só.
+- **Teste de mutação manual**, duas vezes. Invertendo a ordem para
+  `UPDATE` antes do `send`, os **3** testes de `CrashDoRelayTest` falham e
+  `RelayPublicaTest` continua verde — a prova de que é o teste de falha, e não o
+  caminho feliz, que sustenta a ordem. Removendo a guarda
+  `AND status = 'PENDENTE'` do `marcarPublicado`, cai
+  `segundaMarcacaoAfetaZeroLinhas`.
+
+AI: est 2h / actual 30min / ~95% generated / 3 issues caught in review
+
+<!--
+As 3: (1) `Ambiente` nasceria código morto até o step-06, com a suíte montando
+a própria fiação em paralelo — virou a montagem que os testes usam; (2) o
+`Payload` privado dentro de `RepositorioOutboxPostgres` obrigaria o publicador a
+uma segunda cópia do formato, duas versões do contrato com o consumidor; (3)
+`Cenario.cicloTransmitido` só montava o recorte padrão, e o teste de duas
+pendências esbarraria no `UNIQUE (banco, data_ref)` — falharia por um motivo que
+não é o dele.
+-->
+
 ## [step-04] — 2026-08-31 — Fechamento de ciclo
 
 O passo que fecha a janela de retorno sem inventar resposta para quem não

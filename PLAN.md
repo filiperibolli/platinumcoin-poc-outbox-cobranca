@@ -32,7 +32,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   nunca `NAO_PAGO`. Silêncio não é resposta.
   Teste: `FechamentoNaoInventaResultadoTest`.
 
-- [ ] **step-05 — Relay** · [docs/steps/step-05.md](docs/steps/step-05.md)
+- [x] **step-05 — Relay** · [docs/steps/step-05.md](docs/steps/step-05.md)
   `PublicarOutboxUseCase`. Lê `PENDENTE`, publica no SQS, marca `PUBLICADO`.
   Chave de dedup determinística (id da fatura) em atributo da mensagem.
   Testes: `RelayPublicaTest`, `CrashDoRelayTest`.
@@ -92,17 +92,18 @@ domain/port/        RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
 domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02),
                     AplicarRetornoUseCase (03), FecharCicloUseCase (04),
                     PublicarOutboxUseCase (05)
-domain/exception/   FalhaDePersistencia
+domain/exception/   FalhaDePersistencia, FalhaDePublicacao (05)
 api/                LinhaRetorno (03)
 infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
                     RepositorioCicloPostgres, RepositorioTentativaPostgres,
-                    RepositorioOutboxPostgres, PublicadorLancamentoSqs (05)
+                    RepositorioOutboxPostgres, PublicadorLancamentoSqs (05),
+                    Payload (05) — o corpo do lançamento, gravado e publicado
 infra/config/       Ambiente (05) — DataSource + SqsClient
 Main                (06)
 ```
 
-Já existem: os sete modelos, as seis portas, a exceção, os use cases de
-montagem, de geração de remessa, de aplicação de retorno e de fechamento de
-ciclo, a `api/LinhaRetorno` e, em `infra/persistence`, o `TransacaoJdbc` mais os
-quatro repositórios. Falta implementar `RepositorioOutbox.marcarPublicado`
-(step-05) — ele chega junto com o teste que o prova.
+Já existem: os sete modelos, as seis portas, as duas exceções, os cinco use
+cases, a `api/LinhaRetorno`, o `infra/config/Ambiente` e, em
+`infra/persistence`, o `TransacaoJdbc`, os quatro repositórios, o `Payload` e o
+`PublicadorLancamentoSqs`. Todas as portas estão implementadas. Falta o `Main`
+(step-06), que amarra as peças num cenário só.

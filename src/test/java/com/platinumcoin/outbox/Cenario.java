@@ -1,8 +1,12 @@
 package com.platinumcoin.outbox;
 
+import com.platinumcoin.outbox.api.LinhaRetorno;
 import com.platinumcoin.outbox.domain.model.TentativaDebito;
+import com.platinumcoin.outbox.domain.usecase.AplicarRetornoUseCase;
 import com.platinumcoin.outbox.domain.usecase.MontarCicloUseCase;
 import com.platinumcoin.outbox.infra.persistence.RepositorioCicloPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioFaturaPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioOutboxPostgres;
 import com.platinumcoin.outbox.infra.persistence.RepositorioTentativaPostgres;
 import com.platinumcoin.outbox.infra.persistence.TransacaoJdbc;
 
@@ -54,16 +58,51 @@ final class Cenario {
      * arquivo já foi entregue.
      */
     static void cicloTransmitido(String cicloId) {
+        cicloTransmitido(cicloId, DATA);
+    }
+
+    /**
+     * O mesmo, noutra data de referência — o recorte de um segundo ciclo do
+     * mesmo banco, que o {@code UNIQUE (banco, data_ref)} não deixaria repetir
+     * no mesmo dia.
+     */
+    static void cicloTransmitido(String cicloId, LocalDate dataRef) {
         new MontarCicloUseCase(
                 new TransacaoJdbc.Fabrica(AmbienteDeTeste.dados()),
                 new RepositorioCicloPostgres(AmbienteDeTeste.dados()))
-                .executar(cicloId, BANCO, DATA);
+                .executar(cicloId, BANCO, dataRef);
 
         executar("""
                 UPDATE tentativa_debito SET status = 'ENVIADO_PARCEIRO'
                  WHERE ciclo_id = ? AND status = 'SOLICITADO'
                 """, cicloId);
         executar("UPDATE ciclo_cobranca SET status = 'ENVIADO' WHERE id = ?", cicloId);
+    }
+
+    /**
+     * Um pagamento já decidido: a tentativa {@code PAGO}, a fatura {@code PAGA}
+     * e uma linha {@code PENDENTE} no outbox — o estado em que o relay encontra
+     * o mundo.
+     *
+     * <p>Chega até aqui pelo {@code AplicarRetornoUseCase} de verdade, e não por
+     * um {@code INSERT} direto no outbox: o que o relay publica precisa ser o
+     * que a transação de negócio grava.
+     */
+    static void pagamentoPendente(String faturaId, String cicloId, LocalDate dataRef) {
+        tentativaAberta(faturaId, 1, BANCO, dataRef);
+        cicloTransmitido(cicloId, dataRef);
+
+        AplicarRetornoUseCase aplicar = new AplicarRetornoUseCase(
+                new TransacaoJdbc.Fabrica(AmbienteDeTeste.dados()),
+                new RepositorioTentativaPostgres(AmbienteDeTeste.dados()),
+                new RepositorioFaturaPostgres(AmbienteDeTeste.dados()),
+                new RepositorioOutboxPostgres(AmbienteDeTeste.dados()));
+        LinhaRetorno.paga(faturaId + "-T1").aplicarCom(aplicar);
+    }
+
+    /** Atalho para o recorte padrão: banco {@value #BANCO}, data {@link #DATA}. */
+    static void pagamentoPendente(String faturaId, String cicloId) {
+        pagamentoPendente(faturaId, cicloId, DATA);
     }
 
     private static void executar(String sql, String parametro) {

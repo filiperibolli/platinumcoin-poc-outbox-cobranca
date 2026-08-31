@@ -7,15 +7,12 @@ import com.platinumcoin.outbox.domain.port.RepositorioOutbox;
 import com.platinumcoin.outbox.domain.port.Transacao;
 
 import javax.sql.DataSource;
-import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** {@link RepositorioOutbox} em JDBC puro. */
 public final class RepositorioOutboxPostgres implements RepositorioOutbox {
@@ -79,53 +76,24 @@ public final class RepositorioOutboxPostgres implements RepositorioOutbox {
 
     @Override
     public int marcarPublicado(long registroId) {
-        // O relay é o step-05, e marcar publicado só faz sentido depois que
-        // existe um envio para vir antes dele.
-        throw new UnsupportedOperationException("publicação do outbox chega no step-05");
-    }
-
-    /**
-     * O corpo do lançamento, como o consumidor o lê.
-     *
-     * <p>JSON escrito à mão, pela mesma razão do SQL: são dois campos, e uma
-     * biblioteca de serialização seria dependência sem ganho. O que a gravação
-     * escreve, a leitura devolve idêntico — é essa ida e volta que o relay
-     * precisa, e por isso as duas moram juntas.
-     */
-    private static final class Payload {
-
-        private static final Pattern CAMPO = Pattern.compile("\"(\\w+)\":\"([^\"]*)\"");
-
-        private Payload() {
-        }
-
-        static String escrever(LancamentoContabil lancamento) {
-            // Os dois campos são controlados pelo domínio — id de fatura e
-            // decimal. Um id com aspas escaparia do formato calado, então o
-            // caso é recusado aqui, e não descoberto na leitura.
-            if (lancamento.faturaId().matches(".*[\"\\\\].*")) {
-                throw new FalhaDePersistencia(
-                        "id de fatura inválido para o payload: " + lancamento.faturaId());
-            }
-            return "{\"faturaId\":\"" + lancamento.faturaId()
-                    + "\",\"valor\":\"" + lancamento.valor().toPlainString() + "\"}";
-        }
-
-        static LancamentoContabil ler(String payload) {
-            String faturaId = null;
-            BigDecimal valor = null;
-            Matcher campo = CAMPO.matcher(payload);
-            while (campo.find()) {
-                switch (campo.group(1)) {
-                    case "faturaId" -> faturaId = campo.group(2);
-                    case "valor" -> valor = new BigDecimal(campo.group(2));
-                    default -> { }
-                }
-            }
-            if (faturaId == null || valor == null) {
-                throw new FalhaDePersistencia("payload de outbox ilegível: " + payload);
-            }
-            return new LancamentoContabil(faturaId, valor);
+        // Chamado DEPOIS do envio, nunca antes: a ordem é a decisão inteira do
+        // relay — ver ADR-0002.
+        //
+        // A guarda por status é o mesmo idioma do retorno e do fechamento: zero
+        // linhas afetadas significa "outro já marcou", e não é erro. Sem ela, um
+        // segundo relay incrementaria a contagem de publicados desta passada
+        // pela mesma linha.
+        String sql = """
+                UPDATE outbox SET status = 'PUBLICADO', publicado_em = now()
+                 WHERE id = ? AND status = 'PENDENTE'
+                """;
+        try (Connection conexao = fonte.getConnection();
+             PreparedStatement stmt = conexao.prepareStatement(sql)) {
+            stmt.setLong(1, registroId);
+            return stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new FalhaDePersistencia(
+                    "falha ao marcar como publicada a linha " + registroId + " do outbox", e);
         }
     }
 }
