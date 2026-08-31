@@ -3,6 +3,89 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-06] — 2026-08-31 — Cenário ponta a ponta
+
+O último step não acrescenta regra: torna visível, sem ler teste nenhum, o que
+os quatro anteriores provaram. Um `main` roda o ciclo de vida inteiro contra o
+ambiente do Compose e imprime cada transição — inclusive as três que costumam
+ficar escondidas atrás de uma asserção verde: o retorno duplicado que afeta zero
+linhas, o silêncio que vira `SEM_RETORNO`, e a mensagem publicada duas vezes
+porque o relay morreu na hora errada.
+
+### Adicionado
+
+- **`Main`** — a fiação inteira num lugar só e o cenário na ordem em que ele
+  acontece: zera, abre faturas, monta, projeta a remessa, transmite, aplica os
+  retornos, fecha, publica, confere a fila. Quatro faturas, cinco tentativas, um
+  ciclo. Recebe `Ambiente` e `PrintStream` no construtor, o que é o que permite
+  ao teste rodá-lo contra os containers.
+- **`CenarioPontaAPontaTest`** (4 testes) — as linhas da Definition of Done do
+  step viradas em asserção, mais o estado do banco no fim.
+- **`exec-maven-plugin` fixado no `pom.xml`** — `mvn compile exec:java` roda o
+  cenário. A propriedade `exec.mainClass` já existia desde o step-01; faltava a
+  versão do plugin, e plugin sem versão é build que muda sozinha.
+- **README com o passo a passo e a saída real** — com os três detalhes que valem
+  o olho apontados um a um.
+- **`AmbienteDeTeste.ambiente()`** deixou de ser privado: é o mesmo objeto de
+  configuração que o `Main` recebe.
+
+### Decisões
+
+- **A quarta fatura.** O step-06.md pede 3 faturas, "4 tentativas" e uma quarta
+  tentativa sem retorno — e a conta não fecha: a história da `F-2` (recusa e
+  reapresentação) já consome duas tentativas, e a quarta é a da `F-3`, que
+  precisa pagar. As três histórias da tabela ficaram exatamente como escritas, e
+  o silêncio ganhou fatura própria, `F-4`. Isso é mais fiel ao que ele quer
+  mostrar: `SEM_RETORNO` é o parceiro que não falou **nada** sobre uma fatura,
+  não uma reapresentação a menos.
+- **A saída é lida do banco, não narrada de memória.** Cada linha `[retorno]`
+  imprime o status que a tentativa tinha e o que ela passou a ter, relidos pelo
+  repositório. Um `main` que imprime o que espera ter acontecido é um script de
+  slides: continuaria bonito depois de o comportamento mudar.
+- **O `Main` zera banco e fila antes de começar** — e diz isso na primeira
+  linha. A contagem final ("4 lançamentos, 3 chaves") só significa alguma coisa
+  se for deste cenário. É o único lugar do projeto que apaga dados, e por isso
+  está anunciado em vez de escondido no meio.
+- **A contagem final consome as mensagens.** Contar por
+  `ApproximateNumberOfMessages` seria uma estimativa sobre o que o LocalStack
+  acha que tem; receber é o que o mainframe receberia.
+- **O crash é um decorador do `RepositorioOutbox`, o mesmo recorte de
+  `CrashDoRelayTest`.** Simular a morte com um `if` dentro do use case colocaria
+  no código de produção uma linha que só existe para o demo.
+- **A transmissão da remessa continua `UPDATE` solto.** `EnviarRemessa` não tem
+  classe neste repositório, e inventar uma agora — no step que não acrescenta
+  regra — seria escrever SFTP de mentira para o cenário parecer completo.
+- **O `Main` tem teste.** Ele seria a única parte do projeto que só quebra na mão
+  de quem for demonstrá-la; e a Definition of Done do step é sobre o que a saída
+  mostra, o que é exatamente o que dá para asserir.
+
+### Verificado
+
+- `mvn test` → 40 testes, 0 falhas (36 dos steps anteriores, 4 deste).
+- `docker compose up -d` + `mvn compile exec:java` → o cenário roda do começo ao
+  fim contra o Compose; a saída completa está no README.
+- A saída mostra `T-1 PAGO → PAGO (0 linhas afetadas — ignorado)`, o
+  `NAO_PAGO (SALDO_INSUFICIENTE)` e o `SEM_RETORNO: T-5 (F-4)` **sem** linha de
+  outbox, e termina em `4 lançamentos, 3 chaves distintas`.
+- No banco, ao fim: 3 linhas de outbox, todas `PUBLICADO`, nenhuma `PENDENTE` —
+  4 mensagens na fila para 3 lançamentos.
+- **Teste de mutação manual**, duas vezes. Tirando o decorador que mata o relay,
+  o cenário publica 3 mensagens e `aFilaTerminaCom4MensagensE3Chaves` cai —
+  o demo deixaria de mostrar o at-least-once sem que nada acusasse. Aplicando
+  também um retorno pago à `T-5`, 3 dos 4 testes falham: sem silêncio não há
+  `SEM_RETORNO`, e o outbox passa a ter 4 linhas.
+
+AI: est 1h30 / actual 35min / ~95% generated / 2 issues caught in review
+
+<!--
+As 2: (1) a contagem do step-06.md não fecha — 3 faturas e "4 tentativas" com a
+F-2 tendo duas, sobrando a quarta para ser ao mesmo tempo paga (F-3) e sem
+retorno; virou uma quarta fatura silenciosa; (2) a primeira asserção da chave
+duplicada contava "chaveDedup=F-3" na saída inteira e pegava 5 ocorrências — a
+chave também aparece nas linhas de outbox e de send, e o que o teste quer contar
+é o que saiu da fila.
+-->
+
 ## [step-05] — 2026-08-31 — Relay
 
 A publicação, finalmente — e fora da transação, que é o ponto. Aqui o projeto

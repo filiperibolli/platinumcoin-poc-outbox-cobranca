@@ -157,6 +157,75 @@ Só é preciso ter Docker rodando. `mvn test` **não** depende do Compose e o
 Compose não depende dos testes; os dois aplicam os mesmos scripts de
 `infra/init/`.
 
+### Ver o ciclo inteiro rodar
+
+Com o Compose no ar, o cenário ponta a ponta imprime cada transição:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+mvn compile exec:java
+```
+
+Um ciclo, quatro faturas, e as três situações que o projeto existe para mostrar:
+o retorno duplicado que afeta **zero** linhas, o silêncio que vira
+`SEM_RETORNO` sem gerar lançamento, e o relay que morre entre o `send` e o
+`UPDATE` — publicando `F-3` duas vezes com a mesma chave.
+
+```
+[limpeza]  banco zerado, 0 mensagem(ns) de execuções anteriores descartadas
+[dados]    F-1 100.00 ABERTA · T-1
+[dados]    F-2 250.50 ABERTA · T-2, T-3
+[dados]    F-3 89.90 ABERTA · T-4
+[dados]    F-4 42.00 ABERTA · T-5
+[ciclo]    C-1 MONTADO — 5 tentativas ABERTO → SOLICITADO (banco 341, 2026-08-31)
+[remessa]  C-1 5 linhas, sha256=38d2361560d4ccdf (regerada: idêntica)
+[envia]    C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (transporte fora de escopo)
+[retorno]  T-1 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
+[fatura]   F-1 ABERTA → PAGA
+[outbox]   F-1 + PENDENTE (chaveDedup=F-1) — na MESMA transação da fatura
+[retorno]  T-1 PAGO → PAGO  (0 linhas afetadas — ignorado, o retorno já havia sido aplicado)
+[retorno]  T-2 ENVIADO_PARCEIRO → NAO_PAGO (SALDO_INSUFICIENTE)  (1 linha afetada, sem outbox — não é pagamento, ou a fatura já pagou)
+[retorno]  T-3 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
+[fatura]   F-2 ABERTA → PAGA
+[outbox]   F-2 + PENDENTE (chaveDedup=F-2) — na MESMA transação da fatura
+[retorno]  T-4 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
+[fatura]   F-3 ABERTA → PAGA
+[outbox]   F-3 + PENDENTE (chaveDedup=F-3) — na MESMA transação da fatura
+[fecha]    C-1 FECHADO — 1 tentativa(s) ENVIADO_PARCEIRO → SEM_RETORNO: T-5 (F-4)
+[outbox]   3 linhas PENDENTE — nem NAO_PAGO nem SEM_RETORNO geram lançamento
+[relay]    primeira passada — o processo vai morrer entre o send de F-3 e o UPDATE
+[send]     F-1 → SQS  chaveDedup=F-1  msg=821c054e-b554-47d2-b0aa-d31c03dbc7c8
+[send]     F-2 → SQS  chaveDedup=F-2  msg=be279b91-8866-4d5a-9565-9c1021059bcb
+[send]     F-3 → SQS  chaveDedup=F-3  msg=6aa4934c-a670-4bfe-b0c4-c9d65e3435e8
+[crash]    o relay morreu entre o send de F-3 e o UPDATE
+[outbox]   ainda PENDENTE: F-3 — a mensagem saiu, a linha não foi marcada
+[send]     F-3 → SQS  chaveDedup=F-3  msg=b96ab415-d49c-46b2-b376-44524d58cc30
+[relay]    segunda passada — 1 linha(s) PENDENTE → PUBLICADO
+[outbox]   3 PUBLICADO, 0 PENDENTE
+[fila]     chaveDedup=F-1  {"faturaId":"F-1","valor":"100.00"}
+[fila]     chaveDedup=F-2  {"faturaId":"F-2","valor":"250.50"}
+[fila]     chaveDedup=F-3  {"faturaId":"F-3","valor":"89.90"}
+[fila]     chaveDedup=F-3  {"faturaId":"F-3","valor":"89.90"}
+[fila]     4 lançamentos, 3 chaves distintas — F-3 duplicada porque o relay morreu
+[fila]     at-least-once é o contrato: quem desduplica pela chaveDedup é o consumidor — ver ADR-0002
+```
+
+Três detalhes que valem o olho:
+
+- **`[retorno] T-1 PAGO → PAGO (0 linhas afetadas)`** — o mesmo retorno aplicado
+  duas vezes. A segunda não encontra a tentativa em `ENVIADO_PARCEIRO`, e zero
+  linhas não é erro: é o caso normal de um arquivo reprocessado.
+- **`[fecha] ... T-5 (F-4)`** — o parceiro não falou nada sobre a `F-4`. Ela vira
+  `SEM_RETORNO`, e não `NAO_PAGO`: silêncio não é recusa, e nenhum dos dois gera
+  lançamento.
+- **`[fila] 4 lançamentos, 3 chaves distintas`** — o preço da ordem
+  `send` → `UPDATE`. A duplicata é visível, tem a mesma `chaveDedup` e o mesmo
+  corpo; a alternativa (marcar antes de enviar) trocaria essa duplicata por uma
+  mensagem perdida que ninguém procuraria.
+
+O cenário **zera o banco e drena a fila** antes de começar — é um demo, e a
+contagem final precisa ser dele. É o único lugar do projeto que apaga dados.
+
 ### Inspecionar a fila enquanto roda
 
 ```bash
@@ -272,6 +341,8 @@ src/main/java/...
   domain/usecase         MontarCiclo, GerarRemessa, AplicarRetorno,
                          FecharCiclo, PublicarOutbox
   infra/persistence      JDBC puro, uma implementação por porta
+  infra/config           Ambiente — o único lugar que lê configuração
+  Main                   o cenário ponta a ponta, com cada transição impressa
 ```
 
 Máquina de estados:

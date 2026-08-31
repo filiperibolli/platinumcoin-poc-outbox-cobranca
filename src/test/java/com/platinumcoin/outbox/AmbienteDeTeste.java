@@ -85,9 +85,11 @@ public abstract class AmbienteDeTeste {
      * A MESMA montagem que o {@code Main} usa, apontada para os containers.
      *
      * <p>Pela razão dos scripts de init: uma fiação de teste escrita à parte
-     * diverge da de produção sem que nada acuse.
+     * diverge da de produção sem que nada acuse. É também o que o
+     * {@code CenarioPontaAPontaTest} entrega ao {@code Main}: o cenário do
+     * step-06 roda contra os containers sem uma segunda montagem.
      */
-    private static Ambiente ambiente() {
+    protected static Ambiente ambiente() {
         if (ambiente == null) {
             ambiente = Ambiente.de(Map.of(
                     "DB_URL", POSTGRES.getJdbcUrl(),
