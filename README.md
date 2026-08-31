@@ -4,7 +4,12 @@ Prova de **um** conceito: como garantir que um evento financeiro seja publicado
 numa fila externa **exatamente uma vez em relação à decisão de negócio**, quando
 a fila não participa da transação do banco.
 
-Java 21 · Maven · Postgres · SQS (LocalStack) · sem Spring.
+Java 21 · Maven · Postgres · SQS e S3 (LocalStack) · SFTP (`atmoz/sftp`) ·
+Spring Boot (Web).
+
+Spring Boot entrou no step-10 por um motivo único: o projeto passou a expor
+HTTP — um endpoint por passo do ciclo e um painel para observá-lo. O domínio
+continua sem framework, e o `main` de console dos steps 01–06 continua rodando.
 
 ---
 
@@ -74,10 +79,11 @@ flowchart TB
     end
 
     REM["GerarRemessa<br/>função pura do ciclo · regerável byte a byte"]
+    S3R[("S3 · remessa/{banco}/{dataRef}/{cicloId}.rem<br/>chave determinística · sobrescrita idêntica")]
     ENV["EnviarRemessa · até 05:30<br/>SOLICITADO → ENVIADO_PARCEIRO<br/>janela de duplicidade: put antes do commit"]
 
     EB --> montagem
-    montagem --> REM --> ENV
+    montagem --> REM --> S3R --> ENV
 
     subgraph parceiro["Fora do nosso controle"]
         direction LR
@@ -89,6 +95,9 @@ flowchart TB
     COL["ColetarRetorno · 18h–23h<br/>sem callback: varredura periódica<br/>quiescência decide se baixa<br/>trailer decide se está completo"]
     parceiro -.->|"arquivo aparece em algum momento"| COL
 
+    S3T[("S3 · retorno/{banco}/{dataRef}/{nome}<br/>arquivado ANTES de validar o trailer")]
+    COL --> S3T
+
     subgraph retorno["UMA transação Postgres"]
         direction LR
         AR["AplicarRetornoUseCase<br/>UPDATE ... WHERE status = ENVIADO_PARCEIRO"]
@@ -96,7 +105,7 @@ flowchart TB
         AR --> OB[("outbox PENDENTE<br/>só quando PAGO")]
     end
 
-    COL --> retorno
+    S3T --> retorno
 
     FC["FecharCiclo · 00:30<br/>ENVIADO_PARCEIRO → SEM_RETORNO<br/>nunca NAO_PAGO"]
     EB -.-> FC
@@ -110,9 +119,9 @@ flowchart TB
     Q --> MF["Mainframe legado<br/>deduplica por chaveDedup"]
 ```
 
-`EnviarRemessa` e `ColetarRetorno` aparecem no diagrama mas não têm classe neste
-repositório — SFTP e CNAB estão fora de escopo, e isso é deliberado: o diagrama é
-o desenho de sistema completo, o código é o recorte que carrega o aprendizado.
+Os horários no diagrama são o desenho de produção, onde quem dispara cada passo é
+o EventBridge. Neste repositório não há cron nem `@Scheduled`: **cada passo é um
+endpoint**, e cada chamada é uma execução do job — ver "Operar o ciclo pela API".
 
 ## Os três mecanismos
 
@@ -133,9 +142,17 @@ processado" — e é isso que torna idempotente, de uma vez só, o arquivo reenv
 o arquivo parcial, a linha duplicada e o reprocessamento manual.
 
 Qualquer parte do desenho que não se apoie num destes três é um ponto de
-fragilidade. Existe exatamente uma: a janela entre o `send` e o
-`UPDATE PUBLICADO` do relay não se apoia em nenhum deles — e é por isso que ela
-está documentada e testada, em vez de escondida.
+fragilidade. Existem exatamente duas, e as duas têm a mesma forma — um efeito
+externo antes do `COMMIT` que o registra: a janela entre o `send` e o
+`UPDATE PUBLICADO` do relay, e a janela entre o `put` no SFTP e o `COMMIT` das
+transições do envio (step-08). Estão documentadas e testadas, em vez de
+escondidas.
+
+A diferença entre as duas é o que se paga por reexecutar. O arquivo no parceiro
+e o objeto no S3 têm nome determinístico: a segunda gravação **sobrescreve** com
+os mesmos bytes. A mensagem no SQS não tem nome: a segunda **duplica**. É por
+isso que só a fila obriga o consumidor a cooperar — ver
+[ADR-0003](docs/adr/0003-artefato-duravel-no-s3-em-vez-de-geracao-em-memoria.md).
 
 Duas coisas o diagrama torna óbvias. A primeira: o subgraph do parceiro é o que
 não controlamos — ele pode processar e não responder, e é por isso que existe
@@ -226,6 +243,53 @@ Três detalhes que valem o olho:
 O cenário **zera o banco e drena a fila** antes de começar — é um demo, e a
 contagem final precisa ser dele. É o único lugar do projeto que apaga dados.
 
+### Operar o ciclo pela API
+
+> Planejado nos steps 10–12 — ver [PLAN.md](PLAN.md). O que segue é o desenho
+> acordado, não código já escrito.
+
+Cada passo do ciclo é um `POST`, e **cada chamada é uma execução do job**. Não há
+cron nem `@Scheduled` neste projeto: em produção quem chama é o EventBridge, nos
+horários do diagrama acima; aqui quem chama é um botão. Ter tirado o horário do
+código é o que permite executar um passo justamente quando se quer olhar para
+ele.
+
+```
+POST /faturas              cria N faturas de teste com tentativas ABERTO
+POST /ciclo/montar         MontarCiclo
+POST /ciclo/gerar-remessa  GerarRemessa      → artefato no S3
+POST /ciclo/enviar         EnviarRemessa     → arquivo no SFTP do parceiro
+POST /ciclo/coletar        ColetarRetorno    → quiescência + trailer
+POST /ciclo/fechar         FecharCiclo       → SEM_RETORNO
+POST /outbox/publicar      PublicarOutbox    → relay
+GET  /estado               snapshot: banco, outbox, SFTP, S3 e fila
+```
+
+Cada resposta traz **o efeito produzido** — contagens e transições —, não um
+`200` vazio. "Montou C-1 e moveu 5 tentativas" é informação; "montou" não é.
+
+E, do outro lado do fio, o **simulador do parceiro**:
+
+```
+POST /parceiro/processar         lê a remessa e escreve o retorno
+                                 (distribuição, particionar, atrasar)
+POST /parceiro/reenviar-retorno  retorno idêntico já processado
+POST /parceiro/retorno-truncado  trailer que não bate com o conteúdo
+POST /parceiro/silencio          não escreve nada — o caso do SEM_RETORNO
+POST /falha/crash-relay          exceção entre o send ao SQS e o UPDATE
+POST /falha/crash-envio          exceção entre o put no SFTP e o commit
+```
+
+**O simulador não é o sistema — é o ambiente.** Ele vive num pacote `simulador/`,
+fora de `domain` e de `infra`, não é chamado por nenhum use case, e monta o
+retorno a partir da remessa que leu do SFTP, como o banco parceiro faria.
+Consultar o Postgres para produzir o retorno seria mais simples e destruiria o
+valor da demonstração.
+
+O painel (`GET /`) é um único arquivo HTML servido pelo Spring, sem build e sem
+CDN: botões na ordem do fluxo, uma seção separada para provocar falhas, o estado
+das cinco fontes por polling de 2s e um log append-only de cada transição.
+
 ### Inspecionar a fila enquanto roda
 
 ```bash
@@ -264,7 +328,11 @@ docker compose -f infra/docker-compose.yml exec postgres \
 | Ausência de retorno vira `SEM_RETORNO` | colapsar em `NAO_PAGO` | mais um estado para tratar — em troca de não notificar o cliente sobre uma falha de débito que ninguém afirmou que ocorreu |
 | Só `PAGO` gera lançamento, e a regra mora no enum | um `if` dentro do use case | um estado novo quebra a compilação do lugar certo, em vez de passar despercebido |
 | `UNIQUE (fatura_id)` no outbox | só a guarda no código | o segundo lançamento estoura em vez de ser ignorado silenciosamente |
-| JDBC puro, sem framework | Spring Boot + `@Transactional` | mais código de encanamento — em troca, a fronteira transacional fica visível no código, que é justamente o que o projeto quer mostrar |
+| JDBC puro no domínio, sem `@Transactional` | Spring Data / `@Transactional` | mais código de encanamento — em troca, a fronteira transacional fica visível no código, que é justamente o que o projeto quer mostrar |
+| Artefato durável no S3 entre geração e transmissão ([ADR-0003](docs/adr/0003-artefato-duravel-no-s3-em-vez-de-geracao-em-memoria.md)) | regerar a remessa a cada tentativa de envio | um serviço a mais no teto de infra, latência de um `get` antes do `put`, e expurgo que ninguém faz |
+| Nome determinístico no SFTP | sufixo por tentativa (`-1`, `-2`) | reenvio sobrescreve em vez de acumular — mas o parceiro que já leu processa duas vezes, e quem absorve é o `UPDATE` condicional |
+| Trailer decide completude; arquivo que não fecha é descartado inteiro | aplicar as linhas que deram para ler | uma passada perdida — em troca de não produzir um retorno parcial indistinguível de um legítimo |
+| Cada passo é um endpoint, não um cron | `@Scheduled` no próprio serviço | é preciso chamar para acontecer — que é exatamente o ponto: dá para executar o passo quando se quer olhar para ele |
 
 **A fronteira de responsabilidade**, dita em voz alta:
 
@@ -298,17 +366,23 @@ propósito:
   garante a chave estável; quem desduplica é o outro lado.
 - **Sem expurgo do outbox** — nada apaga linhas `PUBLICADO`. Em produção, é a
   tabela que mais cresce.
+- **Sem expurgo do S3** — nada apaga remessas nem retornos arquivados. A chave
+  determinística impede que reexecuções multipliquem objetos, mas retenção é
+  outro problema: em produção, uma lifecycle policy com prazo ditado pela guarda
+  contábil — ver [ADR-0003](docs/adr/0003-artefato-duravel-no-s3-em-vez-de-geracao-em-memoria.md).
 - **Sem pool de conexões, sem métricas, sem tracing.**
 
-E, do lado do desenho de sistema, ficou de fora tudo que é canal e formato — não
-porque seja fácil, mas porque não muda nenhuma das decisões que o projeto
-defende:
+Do lado do desenho de sistema, **canal e formato deixaram de estar fora**: SFTP
+real, artefato durável no S3 e validação de completude por trailer são os steps
+07–09. A ampliação é deliberada — a premissa passou a ser que compreender o
+mecanismo vale mais que manter o projeto pequeno. O que continua fora, porque
+não muda nenhuma das decisões que o projeto defende:
 
-- **SFTP e parsing de CNAB 240**, incluindo validação de trailer e detecção de
-  quiescência do arquivo. É I/O e formato: o resultado do parse alimenta
-  exatamente o mesmo `AplicarRetornoUseCase`. Aqui a remessa é uma String
-  determinística de 3 campos posicionais, que é a única propriedade do formato
-  que o projeto usa como argumento.
+- **CNAB 240 de verdade.** O formato aqui é posicional de largura fixa, com
+  header, detalhe e trailer — o suficiente para que a **contagem no trailer**
+  seja o mecanismo de completude e para que o `id_tentativa` em posição fixa seja
+  a correlation key. O layout do FEBRABAN acrescenta centenas de campos e zero
+  decisão de desenho.
 - **Canal síncrono com throttle** (o banco que expõe API REST em vez de arquivo)
   e o **rate limiter distribuído** que ele exigiria. Trocaria o ciclo em lote por
   uma tentativa por requisição — muda o transporte e a política de vazão, não a
@@ -330,20 +404,33 @@ defende:
 
 ```
 docs/brief.md            o contexto e o problema
-docs/adr/                as duas decisões que sustentam o projeto
+docs/adr/                as três decisões que sustentam o projeto
 docs/steps/              o que cada step entrega e sua Definition of Done
-infra/                   docker-compose + scripts de init (schema e fila)
+infra/                   docker-compose + scripts de init (schema, fila, bucket)
 src/main/java/...
   domain/model           Fatura, CicloCobranca, TentativaDebito, Remessa,
-                         LancamentoContabil, RegistroOutbox
+                         LancamentoContabil, RegistroOutbox, ChaveArtefato
   domain/port            RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
-                         RepositorioOutbox, PublicadorLancamento
-  domain/usecase         MontarCiclo, GerarRemessa, AplicarRetorno,
-                         FecharCiclo, PublicarOutbox
+                         RepositorioOutbox, PublicadorLancamento,
+                         ArmazenamentoArtefato, CanalArquivos
+  domain/usecase         MontarCiclo, GerarRemessa, EnviarRemessa,
+                         ColetarRetorno, AplicarRetorno, FecharCiclo,
+                         PublicarOutbox
+  api                    LinhaRetorno, ArquivoRetorno — adaptadores de entrada
+  api/http               um controller por passo; nenhuma regra de negócio
   infra/persistence      JDBC puro, uma implementação por porta
+  infra/canal            CanalArquivosSftp — SSH de verdade
   infra/config           Ambiente — o único lugar que lê configuração
+  simulador/             o banco parceiro e as falhas provocáveis
+                         — o AMBIENTE, não o sistema
   Main                   o cenário ponta a ponta, com cada transição impressa
+  AplicacaoHttp          o servidor
+src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
+
+Os pacotes `api/http`, `simulador/` e o painel são os steps 10–12; `infra/canal`
+e o armazenamento no S3 são os steps 07–09. Ver [PLAN.md](PLAN.md) para o que já
+está escrito e o que ainda é plano.
 
 Máquina de estados:
 
