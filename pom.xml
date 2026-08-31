@@ -104,6 +104,17 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.13.0</version>
       </plugin>
+      <!-- `mvn compile exec:java` roda o cenário do step-06 contra o ambiente do
+           docker-compose. A classe vem da propriedade exec.mainClass, e a versão
+           está fixada porque um plugin sem versão é uma build que muda sozinha. -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <mainClass>${exec.mainClass}</mainClass>
+        </configuration>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>

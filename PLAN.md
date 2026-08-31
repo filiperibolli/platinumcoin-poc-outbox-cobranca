@@ -37,10 +37,13 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   Chave de dedup determinística (id da fatura) em atributo da mensagem.
   Testes: `RelayPublicaTest`, `CrashDoRelayTest`.
 
-- [ ] **step-06 — Cenário ponta a ponta** · [docs/steps/step-06.md](docs/steps/step-06.md)
-  `Main` que roda um ciclo com 3 faturas — retorno duplicado, duas tentativas,
+- [x] **step-06 — Cenário ponta a ponta** · [docs/steps/step-06.md](docs/steps/step-06.md)
+  `Main` que roda um ciclo com 4 faturas — retorno duplicado, duas tentativas,
   crash simulado no relay — mais uma tentativa sem retorno, imprimindo cada
-  transição.
+  transição. O step-06.md fala em 3 faturas e 4 tentativas, mas a história da
+  `F-2` (recusa e reapresentação) já consome duas: a fatura silenciosa é a
+  quarta, `F-4`.
+  Teste: `CenarioPontaAPontaTest`.
 
 ## As duas invariantes que o projeto existe para provar
 
@@ -102,8 +105,8 @@ infra/config/       Ambiente (05) — DataSource + SqsClient
 Main                (06)
 ```
 
-Já existem: os sete modelos, as seis portas, as duas exceções, os cinco use
-cases, a `api/LinhaRetorno`, o `infra/config/Ambiente` e, em
-`infra/persistence`, o `TransacaoJdbc`, os quatro repositórios, o `Payload` e o
-`PublicadorLancamentoSqs`. Todas as portas estão implementadas. Falta o `Main`
-(step-06), que amarra as peças num cenário só.
+Tudo existe: os sete modelos, as seis portas, as duas exceções, os cinco use
+cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o `TransacaoJdbc`, os
+quatro repositórios, o `Payload`, o `PublicadorLancamentoSqs` e o `Main`, que
+amarra as peças num cenário só. Todas as portas estão implementadas e todos os
+steps do plano estão feitos.
