@@ -11,10 +11,17 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
 
 ## Regras não-negociáveis
 
-1. **Java 21 + Maven. Sem Spring Boot.** Aplicação simples com `main`.
-2. **Teto de infra: Postgres + 1 serviço AWS (SQS via LocalStack).** Nada além.
+1. **Java 21 + Maven.** Steps 01–06: aplicação de console com `main`, sem
+   Spring. A partir do step-10 há **um único** Spring Boot (Web), e por um
+   motivo só: o projeto passa a expor HTTP. O `main` de console continua
+   existindo e continua funcionando.
+2. **Teto de infra: Postgres + LocalStack (SQS e S3) + SFTP (`atmoz/sftp`).**
+   Nada além. O teto subiu no ciclo dos steps 07–12 — ver "Ampliação de escopo"
+   abaixo — e não sobe de novo sem ADR.
 3. **O domínio não importa framework nem AWS SDK.** `api → domain ← infra`.
-   Se um import de `software.amazon.awssdk` aparecer em `domain/`, está errado.
+   Se um import de `software.amazon.awssdk`, `org.springframework` ou de
+   biblioteca SSH aparecer em `domain/`, está errado. O pacote `simulador/` é
+   o ambiente, não o sistema: nada em `domain/` ou `infra/` pode importá-lo.
 4. **Um `<Verbo><Substantivo>UseCase` por operação inbound.**
 5. **Nenhum sistema externo dentro da transação do banco.** A transação escreve
    em `fatura` e em `outbox`; o SQS é chamado depois, por outro componente.
@@ -23,6 +30,10 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
    trade-offs defendidos funcionam:
    `RetornoDuplicadoTest`, `MultiplasTentativasTest`, `CrashDoRelayTest`,
    `MontagemDeterministicaTest`, `FechamentoNaoInventaResultadoTest`.
+   Os steps 07–12 acrescentam à lista, com a mesma proteção:
+   `RemessaSobreviveAReexecucaoTest`, `CrashDepoisDoPutTest`,
+   `ArquivoIncompletoNaoEhProcessadoTest`, `ArquivoEmEscritaNaoEhBaixadoTest`,
+   `RetornoParticionadoTest`.
 7. **`mvn test` sobe tudo sozinho** via Testcontainers, sem depender do Compose.
 8. **Enxuto é propriedade do desenho, não cota de arquivos.** Não há teto.
    A régua é outra: cada arquivo carrega uma responsabilidade que dá para
@@ -32,6 +43,19 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
    clareza da fronteira e nunca os testes de falha.
 9. **Só `PAGO` gera lançamento contábil.** `NAO_PAGO`, `ERRO` e `SEM_RETORNO`
    nunca. A regra mora em `TentativaDebito.Status.geraLancamentoContabil()`.
+
+## Ampliação de escopo (steps 07–12)
+
+Os steps 01–06 provam o outbox: a fronteira transacional entre banco e fila. Os
+steps 07–12 materializam o outro lado do desenho — o ciclo de arquivo contra um
+parceiro real, com API e painel — para que o mecanismo possa ser **visto
+acontecendo** em vez de deduzido de uma suíte verde.
+
+A premissa passou a ser: **compreender o mecanismo vale mais que manter o
+projeto pequeno.** Canal e formato saíram de "fora de escopo" e viraram código.
+Nenhuma decisão dos steps 01–06 foi revista: quem decide o estado de uma
+tentativa continua sendo o `UPDATE` condicional do step-03, e as duas
+invariantes do `PLAN.md` continuam sendo a razão de o projeto existir.
 
 ## Convenções
 

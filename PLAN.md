@@ -45,6 +45,62 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   quarta, `F-4`.
   Teste: `CenarioPontaAPontaTest`.
 
+- [ ] **step-07 — Remessa no S3** · [docs/steps/step-07.md](docs/steps/step-07.md)
+  Separa geração de transmissão, com artefato durável entre as duas.
+  `ArmazenamentoArtefato` (put/get/existe) e chave determinística derivada do
+  ciclo. Layout posicional de largura fixa: header, N detalhes com
+  `id_tentativa` em posição fixa, trailer com a contagem.
+  Testes: `RemessaDeterministicaTest`, `RemessaSobreviveAReexecucaoTest`.
+
+- [ ] **step-08 — Envio por SFTP** · [docs/steps/step-08.md](docs/steps/step-08.md)
+  `EnviarRemessaUseCase` lê o artefato do S3 e transmite por SSH de verdade
+  (`atmoz/sftp`). Nome determinístico no destino: reenvio sobrescreve.
+  A janela `put` → `COMMIT` fica marcada no código, não escondida.
+  Testes: `EnvioChegaNoParceiroTest`, `CrashDepoisDoPutTest`.
+
+- [ ] **step-09 — Coleta de retorno** · [docs/steps/step-09.md](docs/steps/step-09.md)
+  `ColetarRetornoUseCase`. Sem callback: varredura periódica, quiescência
+  (tamanho e mtime iguais em duas leituras) e trailer decidindo completude.
+  Arquivo que não fecha é descartado inteiro e reavaliado na próxima passada.
+  Testes: `ArquivoIncompletoNaoEhProcessadoTest`,
+  `ArquivoEmEscritaNaoEhBaixadoTest`, `RetornoParticionadoTest`.
+
+- [ ] **step-10 — API de operação** · [docs/steps/step-10.md](docs/steps/step-10.md)
+  Spring Boot (Web) entra aqui, e só por isto: o projeto passa a expor HTTP.
+  Um `POST` por passo do ciclo, cada resposta descrevendo o efeito produzido;
+  `GET /estado` com o snapshot das cinco fontes. Cada chamada é uma execução
+  do job que o EventBridge dispararia. Zero regra no controller.
+  Testes: `EndpointsDevolvemEfeitoTest`, `ControllerNaoDecideTest`.
+
+- [ ] **step-11 — Simulador do parceiro e provocação de falhas** · [docs/steps/step-11.md](docs/steps/step-11.md)
+  Pacote `simulador/`, fora de `domain` e `infra`: é o ambiente, não o sistema.
+  Processa a remessa lida do SFTP e escreve o retorno — particionado, atrasado,
+  truncado, reenviado ou nenhum. Mais os dois crashes provocáveis por `POST`.
+  Testes: `SimuladorProduzRetornoAplicavelTest`, `FalhasProvocadasTest`.
+
+- [ ] **step-12 — Painel HTML** · [docs/steps/step-12.md](docs/steps/step-12.md)
+  Um arquivo estático servido pelo Spring — HTML, CSS e JS puro, sem build e
+  sem CDN. Botões na ordem do fluxo, falhas em seção separada, estado por
+  polling de 2s e log de eventos append-only.
+  Teste: `PainelEhServidoTest`.
+
+## O que os steps 07–12 acrescentam
+
+Os steps 01–06 provam o outbox: a fronteira transacional entre banco e fila.
+Os steps 07–12 materializam **o outro lado do desenho** — o ciclo de arquivo
+contra um parceiro real — para que o mecanismo possa ser **visto acontecendo**
+em vez de deduzido de uma suíte verde.
+
+Isso amplia o escopo de propósito. A premissa passa a ser: **compreender o
+mecanismo vale mais que manter o projeto pequeno.** O teto de infra sobe para
+Postgres + S3 + SQS + SFTP, e o Spring Boot entra por um motivo único — o
+projeto passa a expor HTTP.
+
+O que **não** muda: quem decide o estado de uma tentativa continua sendo o
+`UPDATE` condicional do step-03, e as duas invariantes abaixo continuam sendo a
+razão de o projeto existir. Canal e formato mudam de "fora de escopo" para
+"implementados"; nenhuma decisão dos steps 01–06 é revista.
+
 ## As duas invariantes que o projeto existe para provar
 
 > **1.** No máximo **um** `LancamentoContabil` por fatura, qualquer que seja o
@@ -88,25 +144,39 @@ Uma porta por agregado, um use case por operação inbound.
 
 ```
 domain/model/       Fatura, CicloCobranca, TentativaDebito, Remessa (02),
-                    LancamentoContabil, RegistroOutbox
+                    LancamentoContabil, RegistroOutbox,
+                    ChaveArtefato (07)
 domain/port/        RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
-                    RepositorioOutbox, PublicadorLancamento
+                    RepositorioOutbox, PublicadorLancamento,
+                    ArmazenamentoArtefato (07), CanalArquivos (08, ampliada em 09)
                     Transacao (fronteira transacional, não é porta de negócio)
-domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02),
+domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02, grava em 07),
                     AplicarRetornoUseCase (03), FecharCicloUseCase (04),
-                    PublicarOutboxUseCase (05)
+                    PublicarOutboxUseCase (05), EnviarRemessaUseCase (08),
+                    ColetarRetornoUseCase (09)
 domain/exception/   FalhaDePersistencia, FalhaDePublicacao (05)
-api/                LinhaRetorno (03)
+api/                LinhaRetorno (03), ArquivoRetorno (09) — parser e trailer
+api/http/           um controller por passo (10) + DTOs de efeito
 infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
                     RepositorioCicloPostgres, RepositorioTentativaPostgres,
                     RepositorioOutboxPostgres, PublicadorLancamentoSqs (05),
                     Payload (05) — o corpo do lançamento, gravado e publicado
-infra/config/       Ambiente (05) — DataSource + SqsClient
-Main                (06)
+                    ArmazenamentoArtefatoS3 (07), RepositorioArquivoRetorno (09)
+infra/canal/        CanalArquivosSftp (08)
+infra/falha/        decoradores das falhas provocáveis (11)
+infra/config/       Ambiente (05) — DataSource + SqsClient + S3Client + SFTP
+simulador/          ParceiroSimulado e seus endpoints (11) — o ambiente, não o sistema
+resources/static/   index.html — o painel (12)
+Main                (06) — o cenário de console, que continua existindo
+AplicacaoHttp       (10) — o servidor
 ```
 
-Tudo existe: os sete modelos, as seis portas, as duas exceções, os cinco use
-cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o `TransacaoJdbc`, os
-quatro repositórios, o `Payload`, o `PublicadorLancamentoSqs` e o `Main`, que
-amarra as peças num cenário só. Todas as portas estão implementadas e todos os
-steps do plano estão feitos.
+Do step-06 tudo existe: os sete modelos, as seis portas, as duas exceções, os
+cinco use cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o
+`TransacaoJdbc`, os quatro repositórios, o `Payload`, o
+`PublicadorLancamentoSqs` e o `Main`, que amarra as peças num cenário só.
+
+O que está marcado com (07) a (12) é plano, não código. A régua para julgá-lo é
+a mesma: cada arquivo com uma responsabilidade que dá para nomear sem usar "e".
+Se um step apertar, corta-se **escopo** — regra de negócio, canal, formato —
+nunca os testes de falha.
