@@ -1,5 +1,6 @@
 package com.platinumcoin.outbox.domain.model;
 
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 
 /**
@@ -36,6 +37,28 @@ public record ChaveArtefato(String valor) {
         }
         return new ChaveArtefato("remessa/%s/%s/%s.rem".formatted(
                 ciclo.banco(), DATA.format(ciclo.dataRef()), ciclo.id()));
+    }
+
+    /**
+     * {@code retorno/{banco}/{dataRef}/{nome}} — onde o arquivo que <b>voltou</b>
+     * do parceiro é arquivado.
+     *
+     * <p>Termina no nome que o parceiro escolheu, e não num id nosso, porque o
+     * arquivo é dele: um ciclo pode receber vários, e o nome é a única coisa que
+     * os distingue. As duas primeiras pastas são nossas — o recorte que o
+     * cabeçalho declara — e é o que torna o arquivamento navegável quando alguém
+     * for procurar o que o parceiro mandou naquele dia.
+     *
+     * <p>O arquivamento acontece <b>antes</b> da validação do trailer: o arquivo
+     * que não fecha é justamente o que alguém vai querer olhar.
+     */
+    public static ChaveArtefato doRetorno(String banco, LocalDate dataRef, String nome) {
+        if (banco == null || banco.isBlank() || dataRef == null || nome == null || nome.isBlank()) {
+            throw new IllegalArgumentException(
+                    "chave de retorno incompleta (banco=" + banco + ", data=" + dataRef
+                            + ", nome=" + nome + ")");
+        }
+        return new ChaveArtefato("retorno/%s/%s/%s".formatted(banco, DATA.format(dataRef), nome));
     }
 
     /**

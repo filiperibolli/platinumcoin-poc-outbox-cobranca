@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FundacaoTest extends AmbienteDeTeste {
 
     @Test
-    @DisplayName("o schema aplicado pelo script de init tem as quatro tabelas do fluxo")
+    @DisplayName("o schema aplicado pelo script de init tem as cinco tabelas do fluxo")
     void schemaCriadoPeloScriptDeInit() throws SQLException {
         List<String> tabelas = new ArrayList<>();
         try (Connection conexao = novaConexao();
@@ -42,7 +42,9 @@ class FundacaoTest extends AmbienteDeTeste {
             }
         }
 
-        assertEquals(List.of("ciclo_cobranca", "fatura", "outbox", "tentativa_debito"), tabelas);
+        assertEquals(
+                List.of("arquivo_retorno", "ciclo_cobranca", "fatura", "outbox", "tentativa_debito"),
+                tabelas);
     }
 
     @Test

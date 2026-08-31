@@ -58,12 +58,16 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   A janela `put` → `COMMIT` fica marcada no código, não escondida.
   Testes: `EnvioChegaNoParceiroTest`, `CrashDepoisDoPutTest`.
 
-- [ ] **step-09 — Coleta de retorno** · [docs/steps/step-09.md](docs/steps/step-09.md)
+- [x] **step-09 — Coleta de retorno** · [docs/steps/step-09.md](docs/steps/step-09.md)
   `ColetarRetornoUseCase`. Sem callback: varredura periódica, quiescência
   (tamanho e mtime iguais em duas leituras) e trailer decidindo completude.
   Arquivo que não fecha é descartado inteiro e reavaliado na próxima passada.
+  `LeitorDeRetorno` é a porta que mantém `api → domain` de pé: quem sabe posição
+  de campo é `api/ArquivoRetorno`, e o coletor só sabe que alguém responde
+  "de que recorte é, se fecha, e o que afirma".
   Testes: `ArquivoIncompletoNaoEhProcessadoTest`,
-  `ArquivoEmEscritaNaoEhBaixadoTest`, `RetornoParticionadoTest`.
+  `ArquivoEmEscritaNaoEhBaixadoTest`, `RetornoParticionadoTest`,
+  `ReenvioDeRetornoTest`.
 
 - [ ] **step-10 — API de operação** · [docs/steps/step-10.md](docs/steps/step-10.md)
   Spring Boot (Web) entra aqui, e só por isto: o projeto passa a expor HTTP.
@@ -145,10 +149,11 @@ Uma porta por agregado, um use case por operação inbound.
 ```
 domain/model/       Fatura, CicloCobranca, TentativaDebito, Remessa (02),
                     LancamentoContabil, RegistroOutbox,
-                    ChaveArtefato (07)
+                    ChaveArtefato (07), Sha256 (09)
 domain/port/        RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
                     RepositorioOutbox, PublicadorLancamento,
                     ArmazenamentoArtefato (07), CanalArquivos (08, ampliada em 09)
+                    RepositorioArquivoRetorno (09), LeitorDeRetorno (09)
                     Transacao (fronteira transacional, não é porta de negócio)
 domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02, grava em 07),
                     AplicarRetornoUseCase (03), FecharCicloUseCase (04),
@@ -161,7 +166,7 @@ infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
                     RepositorioCicloPostgres, RepositorioTentativaPostgres,
                     RepositorioOutboxPostgres, PublicadorLancamentoSqs (05),
                     Payload (05) — o corpo do lançamento, gravado e publicado
-                    ArmazenamentoArtefatoS3 (07), RepositorioArquivoRetorno (09)
+                    ArmazenamentoArtefatoS3 (07), RepositorioArquivoRetornoPostgres (09)
 infra/canal/        CanalArquivosSftp (08)
 infra/falha/        decoradores das falhas provocáveis (11)
 infra/config/       Ambiente (05) — DataSource + SqsClient + S3Client + SFTP

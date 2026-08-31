@@ -90,3 +90,29 @@ CREATE TABLE outbox (
 
 -- O relay varre só o que está PENDENTE.
 CREATE INDEX outbox_pendente_idx ON outbox (id) WHERE status = 'PENDENTE';
+
+-- Os arquivos de retorno que já foram baixados e aplicados por inteiro.
+--
+-- A linha nasce DEPOIS de as linhas do arquivo terem sido aplicadas, e não
+-- antes: gravar o hash primeiro transformaria uma morte no meio da aplicação em
+-- trabalho perdido, porque a próxima passada curto-circuitaria um arquivo que
+-- não chegou a ser aplicado inteiro.
+CREATE TABLE arquivo_retorno (
+    nome       TEXT        NOT NULL,
+    sha256     TEXT        NOT NULL,
+    ciclo_id   TEXT        NOT NULL REFERENCES ciclo_cobranca (id),
+    linhas     INTEGER     NOT NULL,
+    baixado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- A identidade da linha SÃO os bytes, e por isso não há chave substituta:
+    -- o mesmo nome pode voltar com conteúdo diferente — o parceiro reenviou com
+    -- uma linha a mais — e as duas vezes são história legítima, cada uma com sua
+    -- linha aqui.
+    --
+    -- Isto é um ATALHO DE CUSTO, não a garantia de idempotência. Quem garante
+    -- continua sendo o UPDATE condicional do step-03: o hash só reconhece o
+    -- reenvio byte-idêntico, e um reenvio com outro espaçamento passa direto —
+    -- e está certo que passe.
+    -- DECISÃO: hash curto-circuita o reprocessamento, não o substitui — ver step-09
+    CONSTRAINT arquivo_retorno_bytes_ja_vistos UNIQUE (sha256)
+);

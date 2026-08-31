@@ -2,12 +2,9 @@ package com.platinumcoin.outbox.domain.model;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -125,11 +122,7 @@ public record Remessa(String cicloId, ChaveArtefato chave, String conteudo) {
      * é asserção sobre o nosso próprio código.
      */
     public String sha256() {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes()));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JRE sem SHA-256", e);
-        }
+        return Sha256.de(bytes());
     }
 
     /** Quantas linhas de detalhe o trailer promete — a contagem que o parceiro confere. */

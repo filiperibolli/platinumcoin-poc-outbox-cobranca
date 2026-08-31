@@ -3,6 +3,140 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-09] — 2026-08-31 — Coleta de retorno com quiescência e trailer
+
+"Sem callback" deixa de ser uma frase sobre o parceiro e vira três mecanismos no
+código. O parceiro não avisa que o arquivo chegou, não avisa que terminou de
+escrevê-lo e não garante um arquivo por ciclo — e cada uma dessas três ausências
+tem agora um teste que a prova cara:
+
+| ausência | mecanismo | o que custa não ter |
+|---|---|---|
+| não avisa que chegou | varredura periódica | nada acontece até alguém olhar |
+| não avisa que terminou | quiescência (2 leituras) | aplica-se um arquivo cortado ao meio |
+| não garante um por ciclo | trailer + aplicação incremental | metade do dia vira `SEM_RETORNO` |
+
+O que **não** mudou: quem decide o estado de uma tentativa continua sendo o
+`UPDATE ... WHERE status = 'ENVIADO_PARCEIRO'` do step-03. A coleta só entrega
+linhas a ele — e é justamente por isso que o `sha256` deste step pode ser só um
+atalho de custo.
+
+### Adicionado
+
+- **`ColetarRetornoUseCase`** — uma passada: lista, aplica quiescência, baixa,
+  arquiva, valida o trailer, aplica linha a linha, registra o hash. **Nada é
+  marcado como "em processamento"**: o que não passa numa passada é reavaliado
+  na seguinte, a partir do mesmo estado. Não há estado intermediário para vazar
+  quando o processo morre no meio.
+- **`LeitorDeRetorno`** — a porta que mantém `api → domain` de pé. O coletor
+  mora no domínio e o parser mora em `api/`; sem esta porta a dependência
+  apontaria para o lado errado, e é `FundacaoTest.dominioIsolado` quem cobra.
+  Ela responde três perguntas sobre um punhado de bytes: de que recorte é, se
+  fecha, e o que afirma.
+- **`api/ArquivoRetorno`** — o parser do layout posicional (header, N detalhes,
+  trailer), implementando `LeitorDeRetorno.Retorno`. Aplica cada linha por
+  `LinhaRetorno.aplicarCom`, que é o adaptador que o step-03 desenhou e que aqui
+  só ganhou quem o alimente.
+- **`CanalArquivos.listar/atributos/baixar`** — a porta do step-08 ganha a
+  leitura. `Atributos` traz tamanho **e** mtime; `atributos` devolve
+  `Optional`, porque sumir entre a listagem e a pergunta é resposta, não falha.
+  Continua **sem `remover`**: o diretório é do parceiro.
+- **Tabela `arquivo_retorno`** — `nome`, `sha256`, `ciclo_id`, `linhas`,
+  `baixado_em`, com `UNIQUE (sha256)` e sem chave substituta: a identidade da
+  linha **são** os bytes. O mesmo nome pode voltar com outro conteúdo, e as duas
+  vezes são história legítima.
+- **`RepositorioArquivoRetorno`** + **`RepositorioArquivoRetornoPostgres`** —
+  duas operações, "já vi estes bytes?" e "vi estes bytes". Nenhuma consulta por
+  nome, ciclo ou data, porque nenhuma decisão do domínio depende disso.
+- **`ChaveArtefato.doRetorno`** — `retorno/{banco}/{dataRef}/{nome}`. Termina no
+  nome que o parceiro escolheu, e não num id nosso: o arquivo é dele, um ciclo
+  pode receber vários, e o nome é a única coisa que os distingue.
+- **`Sha256`** — o mesmo hash num lugar só. O projeto guarda a mesma afirmação
+  ("estes eram os bytes") em duas tabelas, e duas implementações seriam duas
+  chances de a comparação entre elas deixar de fazer sentido. `Remessa.sha256()`
+  passou a delegar.
+- **`ArquivoIncompletoNaoEhProcessadoTest`** (2), **`ArquivoEmEscritaNaoEhBaixadoTest`**
+  (1), **`RetornoParticionadoTest`** (1) e **`ReenvioDeRetornoTest`** (2) — os
+  três obrigatórios do step mais o par que a Definition of Done pede sobre o
+  hash.
+- **`RetornoDoParceiro`** (teste) — o parceiro escrevendo. Fica do lado do teste
+  porque **este projeto não escreve arquivos de retorno, ele os lê**; quem
+  escreve é o outro lado do fio, e no step-11 vira o `simulador/`. O layout está
+  montado à mão ali de propósito: se o parser divergir do contrato, é este
+  arquivo que deixa de bater com ele — como aconteceria com o parceiro de
+  verdade.
+
+### Decisões
+
+- **Descartar o arquivo incompleto inteiro, em vez de aplicar o que dá.** Meia
+  aplicação é indistinguível de um retorno legítimo menor, e o fechamento do
+  ciclo transformaria o resto em `SEM_RETORNO` — afirmando silêncio onde havia
+  ruído. Um retorno pela metade aplicado é pior que nenhum, porque nada no banco
+  registra que ele estava pela metade.
+- **Quiescência por tamanho *e* mtime.** Só o tamanho não pega o arquivo
+  reescrito no lugar com o mesmo comprimento; só o mtime não pega o arquivo que
+  cresce dentro do mesmo segundo — a resolução que o protocolo dá.
+- **Intervalo configurável, não constante.** Milissegundos na suíte, minutos em
+  produção. Uma constante forçaria o teste a esperar de verdade, e um teste que
+  dorme minutos é um teste que ninguém roda.
+- **O hash é gravado *depois* de aplicar, nunca antes.** Antes, o processo que
+  morresse no meio da aplicação deixaria o atalho gravado e o trabalho pela
+  metade — e a próxima passada curto-circuitaria justamente o arquivo que ainda
+  tinha o que aplicar. É a mesma ordem do relay pela mesma razão.
+- **O hash é atalho de custo, não garantia de idempotência.** Ele cobre
+  "exatamente os mesmos bytes". Um reenvio com uma linha a mais passa direto — e
+  está **certo** que passe, porque é o `UPDATE` condicional que sabe o que já foi
+  aplicado. `ReenvioDeRetornoTest` prova as duas metades dessa frase.
+- **Nada é apagado do diretório do parceiro.** O arquivo já aplicado reaparece em
+  toda varredura, e quem o reconhece são os bytes, não o desaparecimento. Uma
+  coleta que apagasse trocaria uma pergunta barata por um efeito destrutivo
+  irreversível num diretório que não é nosso.
+- **O crescimento do arquivo em escrita vem de um decorador, não de uma
+  thread.** O crescimento tem que acontecer *depois* da primeira leitura e
+  *antes* da segunda; uma thread acertaria esse instante às vezes, e um teste que
+  falha sozinho deixa de ser lido.
+- **`RetornoParticionadoTest` compara o estado inteiro, não uma contagem.**
+  Contar acertaria mesmo se as partes tivessem se aplicado à tentativa errada.
+  Fora do retrato ficam o id e o `criado_em` do outbox (são de quando a linha
+  nasceu, não do que ela diz) e a `arquivo_retorno` — ela registra quantos
+  arquivos chegaram, que é a única coisa que os dois caminhos não têm em comum.
+- **A coleta não fecha o ciclo.** Ela não sabe se o parceiro terminou o dia —
+  ninguém sabe. Quem declara o dia encerrado continua sendo `FecharCicloUseCase`,
+  por horário.
+- **O `Main` não mudou.** Ele aplica linhas de retorno construídas à mão porque
+  não há quem escreva o arquivo do lado do parceiro: isso é o `simulador/` do
+  step-11. Emendar aqui um parceiro de mentira seria fazer o step seguinte.
+
+### Verificado
+
+- `mvn test` → 58 testes, 0 falhas (52 dos steps anteriores, 6 deste).
+- `RetornoDuplicadoTest` e `MultiplasTentativasTest` continuam verdes **sem uma
+  linha alterada** — a coleta não mexeu na decisão.
+- `FundacaoTest.dominioIsolado` continua verde: `ColetarRetornoUseCase` não
+  importa `api`, e é a `LeitorDeRetorno` que paga por isso.
+- `FundacaoTest.schemaCriadoPeloScriptDeInit` passou a cobrar **cinco** tabelas.
+- `ArquivoEmEscritaNaoEhBaixadoTest` assere `downloads() == 0`: não basta o
+  banco não ter mudado, o arquivo não pode nem ter sido transferido.
+
+AI: est 2h30 / actual 55min / ~95% generated / 1 issue caught in review
+
+<!--
+O 1: a primeira versão do `ColetarRetornoUseCase` importava `api.ArquivoRetorno`
+direto. Compilava, e teria quebrado `FundacaoTest.dominioIsolado` — o teste que
+existe exatamente para isso. A correção não foi afrouxar o teste: foi a porta
+`LeitorDeRetorno`, que é o desenho que o repo já usava para o S3, para o SQS e
+para o SFTP, aplicado ao parser.
+
+O javadoc de `LinhaRetorno` dizia que "o coletor que baixa o arquivo e o
+interpreta não tem classe neste repositório". Envelheceu no mesmo commit que o
+criou — o mesmo tipo de comentário que o step-08 já tinha corrigido uma vez.
+
+O sshj loga permissões e timestamps de cada download usando o logger da NOSSA
+subclasse de `InMemoryDestFile`, e não o dele: a linha `net.schmizz=warn` do
+step-08 não alcançava. Três linhas INFO por arquivo baixado, silenciadas com uma
+segunda linha no `simplelogger.properties`.
+-->
+
 ## [step-08] — 2026-08-31 — Envio da remessa por SFTP
 
 A transmissão deixa de ser um `UPDATE` com um comentário dizendo "transporte

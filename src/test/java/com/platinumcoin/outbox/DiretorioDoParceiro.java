@@ -6,9 +6,12 @@ import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import net.schmizz.sshj.xfer.InMemoryDestFile;
+import net.schmizz.sshj.xfer.InMemorySourceFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.List;
 
@@ -35,6 +38,37 @@ final class DiretorioDoParceiro {
                 .map(RemoteResourceInfo::getName)
                 .sorted()
                 .toList());
+    }
+
+    /**
+     * Deixa o conteúdo no caminho, sobrescrevendo o que houver lá.
+     *
+     * <p>É o parceiro escrevendo — o lado que este projeto não implementa (o
+     * simulador chega no step-11). Serve tanto para depositar um retorno pronto
+     * quanto para <b>fazê-lo crescer</b> entre duas leituras de atributos, que é
+     * como {@code ArquivoEmEscritaNaoEhBaixadoTest} produz um arquivo em
+     * escrita sem depender de temporização.
+     */
+    void escrever(String caminho, byte[] conteudo) {
+        conectado(sftp -> {
+            sftp.put(new InMemorySourceFile() {
+                @Override
+                public String getName() {
+                    return caminho;
+                }
+
+                @Override
+                public long getLength() {
+                    return conteudo.length;
+                }
+
+                @Override
+                public InputStream getInputStream() {
+                    return new ByteArrayInputStream(conteudo);
+                }
+            }, caminho);
+            return null;
+        });
     }
 
     byte[] baixar(String caminho) {
