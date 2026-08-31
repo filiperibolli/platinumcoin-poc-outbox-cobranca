@@ -10,13 +10,27 @@ Java 21 · Maven · Postgres · SQS (LocalStack) · sem Spring.
 
 ## O problema
 
-Um sistema de débito automático processa arquivos de retorno de um banco
-parceiro. Cada linha diz o que aconteceu com uma tentativa de débito. Quando uma
-fatura é marcada como **PAGA**, um **lançamento contábil** precisa ser publicado
-numa fila que um mainframe legado consome. O mainframe aceita **um lançamento
-por fatura** — um lançamento duplicado não quebra nada tecnicamente, mas gera uma
-divergência que alguém concilia à mão no mês seguinte. Uma fatura pode ter N
-tentativas de débito; no máximo uma delas paga, e no máximo um lançamento sai.
+Um sistema de débito automático de faturas de cartão. O cliente autoriza o
+débito da fatura na conta que mantém num banco parceiro; todo dia, as faturas
+que vencem naquela data são apresentadas ao banco para débito. O resultado de
+cada tentativa volta e precisa refletir em dois lugares: na fatura do cliente,
+que passa a PAGA, e no razão contábil, que recebe um **lançamento contábil** por
+fatura paga. O razão é um mainframe legado que consome uma fila e aceita **um
+lançamento por fatura**. Uma fatura pode ter N tentativas de débito; no máximo
+uma delas paga, e no máximo um lançamento sai. Um lançamento duplicado não
+quebra nada tecnicamente, mas gera uma divergência que alguém concilia à mão no
+mês seguinte.
+
+Bancos parceiros não atendem por chamada síncrona: trabalham por troca de
+arquivos em janelas fixas. A remessa com as faturas do dia sai de madrugada, o
+retorno chega em algum momento da noite — sem callback, sem aviso de que chegou,
+às vezes particionado em mais de um arquivo, às vezes nunca. Não existe a quem
+perguntar o que aconteceu com uma fatura específica antes da janela seguinte.
+Isso força o desenho a ser um ciclo diário com fechamento explícito, e não um
+fluxo reativo: em algum momento é preciso declarar o dia encerrado e dizer o que
+aconteceu com as tentativas sobre as quais o parceiro não falou nada. É por isso
+que existe `SEM_RETORNO` — o estado que registra a ausência de resposta sem
+inventar uma.
 
 O banco de dados e a fila são sistemas distintos, sem transação distribuída. Só
 existem duas ordens possíveis, e as duas têm uma janela de falha. Se o `COMMIT`
@@ -25,7 +39,11 @@ nunca é publicado — e, pior, **nada no sistema registra que havia algo a
 publicar**, então nenhum reprocessamento descobre a perda. Se o `send` vem antes
 do `COMMIT` e o processo morre no meio, o mainframe contabiliza um lançamento de
 uma fatura que continua ABERTA: o mundo externo passa a conter um fato que o
-sistema de registro nega.
+sistema de registro nega. O mesmo raciocínio se aplica duas vezes no ciclo, e
+não uma: na montagem, entre a escrita do ciclo no banco e o artefato de remessa
+que sai para o parceiro; e na publicação, entre a escrita do resultado e a
+mensagem na fila. Nos dois pontos há uma escrita que decide e um efeito externo
+que não commita junto com ela.
 
 A saída é não escolher entre as duas. A decisão de negócio e a **intenção de
 publicar** são gravadas juntas, no mesmo `COMMIT` do Postgres — a intenção vira
@@ -47,41 +65,77 @@ corrida contra outro processo.
 
 ```mermaid
 flowchart TB
-    subgraph montagem["step-02 · UMA transação Postgres"]
+    EB["EventBridge · crons"]
+
+    subgraph montagem["05:00 · UMA transação Postgres"]
         direction LR
         M["MontarCicloUseCase"] --> CC[("ciclo_cobranca<br/>MONTADO")]
         M --> T1[("tentativa_debito<br/>ABERTO → SOLICITADO")]
     end
 
-    REM["remessa<br/>função pura do ciclo, regerável byte a byte"]
-    montagem --> REM
+    REM["GerarRemessa<br/>função pura do ciclo · regerável byte a byte"]
+    ENV["EnviarRemessa · até 05:30<br/>SOLICITADO → ENVIADO_PARCEIRO<br/>janela de duplicidade: put antes do commit"]
 
-    subgraph parceiro["Fora do nosso controle · banco parceiro"]
+    EB --> montagem
+    montagem --> REM --> ENV
+
+    subgraph parceiro["Fora do nosso controle"]
         direction LR
         PREC["recebe a remessa"] --> PDEB["processa o débito"] --> PRET["devolve o retorno<br/>— ou não devolve"]
     end
 
-    REM -->|"transmite · SOLICITADO → ENVIADO_PARCEIRO"| parceiro
+    ENV --> parceiro
 
-    subgraph retorno["step-03 · UMA transação Postgres"]
+    COL["ColetarRetorno · 18h–23h<br/>sem callback: varredura periódica<br/>quiescência decide se baixa<br/>trailer decide se está completo"]
+    parceiro -.->|"arquivo aparece em algum momento"| COL
+
+    subgraph retorno["UMA transação Postgres"]
         direction LR
         AR["AplicarRetornoUseCase<br/>UPDATE ... WHERE status = ENVIADO_PARCEIRO"]
         AR --> TD[("tentativa → PAGO / NAO_PAGO / ERRO<br/>fatura ABERTA → PAGA")]
         AR --> OB[("outbox PENDENTE<br/>só quando PAGO")]
     end
 
-    parceiro --> retorno
+    COL --> retorno
 
-    FC["FecharCicloUseCase · step-04<br/>ENVIADO_PARCEIRO → SEM_RETORNO<br/>nunca NAO_PAGO"]
-    parceiro -.->|"o ciclo fecha e nada chegou"| FC
+    FC["FecharCiclo · 00:30<br/>ENVIADO_PARCEIRO → SEM_RETORNO<br/>nunca NAO_PAGO"]
+    EB -.-> FC
+    FC --> TD
     FC --> CC
 
-    RL["PublicarOutboxUseCase · relay · step-05"]
+    RL["PublicarOutbox · relay"]
     OB -.->|"SELECT PENDENTE"| RL
     RL -->|"send + chaveDedup"| Q(["SQS · lancamentos-contabeis"])
     RL -.->|"UPDATE PUBLICADO"| OB
     Q --> MF["Mainframe legado<br/>deduplica por chaveDedup"]
 ```
+
+`EnviarRemessa` e `ColetarRetorno` aparecem no diagrama mas não têm classe neste
+repositório — SFTP e CNAB estão fora de escopo, e isso é deliberado: o diagrama é
+o desenho de sistema completo, o código é o recorte que carrega o aprendizado.
+
+## Os três mecanismos
+
+A correção deste desenho não vem de vigilância nem de retentativa. Vem de três
+mecanismos, e de mais nenhum.
+
+**Uma escrita transacional por passo.** Cada passo do ciclo tem exatamente uma
+escrita que decide algo, num único banco, num único `COMMIT`. Nenhum sistema
+externo participa dela.
+
+**Trabalho derivado re-executável.** Tudo que vem depois da decisão é função do
+estado commitado: a remessa é função pura do ciclo, a publicação é função do
+outbox. Reexecutar é seguro por construção, e não por verificação prévia.
+
+**Transição condicional de estado.** Toda aplicação de resultado externo é
+`UPDATE ... WHERE status = <esperado>`. Zero linhas afetadas significa "já
+processado" — e é isso que torna idempotente, de uma vez só, o arquivo reenviado,
+o arquivo parcial, a linha duplicada e o reprocessamento manual.
+
+Qualquer parte do desenho que não se apoie num destes três é um ponto de
+fragilidade. Existe exatamente uma: a janela entre o `send` e o
+`UPDATE PUBLICADO` do relay não se apoia em nenhum deles — e é por isso que ela
+está documentada e testada, em vez de escondida.
 
 Duas coisas o diagrama torna óbvias. A primeira: o subgraph do parceiro é o que
 não controlamos — ele pode processar e não responder, e é por isso que existe
