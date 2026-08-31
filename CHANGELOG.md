@@ -3,6 +3,93 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-03] — 2026-08-31 — Aplicar retorno
+
+A transação que decide **e** registra a intenção de publicar. É o step que o
+projeto existe para mostrar: três escritas, um banco, um `COMMIT`, e nenhuma
+chamada externa lá dentro.
+
+### Adicionado
+
+- **`AplicarRetornoUseCase`** — aplica a uma tentativa o desfecho que o parceiro
+  informou. Quando o desfecho é `PAGO`, na mesma transação a fatura vai a `PAGA`
+  e a intenção de publicar entra no `outbox`. `NAO_PAGO` e `ERRO` movem a
+  tentativa e param aí. Devolve um `Resultado`
+  (`IGNORADO`, `APLICADO`, `APLICADO_COM_LANCAMENTO`) — o bastante para explicar
+  a chamada num log sem consultar o banco.
+- **`api/LinhaRetorno`** — a linha do arquivo de retorno, com fábricas `paga`,
+  `naoPaga` e `comErro`. É o adaptador de entrada: `aplicarCom(useCase)`
+  traduz a linha numa chamada em tipos de domínio.
+- **`RepositorioTentativaPostgres.registrarResultado`** — o `UPDATE ... WHERE id
+  = ? AND status = 'ENVIADO_PARCEIRO'`. Zero linhas afetadas é a resposta, não
+  um erro.
+- **`RepositorioFaturaPostgres`** — inclui `marcarPaga`, com a guarda
+  `AND status = 'ABERTA'`, e `buscarPorTentativa`, lida pela mesma conexão da
+  transação.
+- **`RepositorioOutboxPostgres`** — `inserir` (na transação) e `pendentes` (fora
+  dela), mais o payload JSON escrito à mão e sua leitura. `marcarPublicado`
+  segue declarado e não implementado até o step-05.
+- **`TentativaDebito.exigirMotivoCoerente`** e
+  **`TentativaDebito.Status.vemDoRetorno()`** — duas regras que passaram a ter
+  três chamadores cada, extraídas para ter um dono só.
+- **`Cenario.cicloTransmitido`** nos testes — monta o ciclo pelo use case real e
+  leva as tentativas a `ENVIADO_PARCEIRO` por SQL direto, porque
+  `EnviarRemessa` não tem classe neste repositório.
+
+### Decisões
+
+- **`LinhaRetorno` mora em `api/` e o use case não a importa.** A alternativa
+  óbvia — passar o record ao use case — inverteria a seta `api → domain` e
+  quebraria `FundacaoTest.dominioIsolado`. Em vez de afrouxar a regra, a linha
+  ganhou `aplicarCom`: quem conhece os dois lados é o adaptador, que é o papel
+  dele.
+- **Um retorno por chamada, uma transação por retorno.** Cada linha do arquivo é
+  uma decisão independente: uma linha que estoura não pode desfazer as que já
+  foram aplicadas, e reprocessar o arquivo inteiro é seguro porque as que
+  passaram viram zero linhas afetadas na segunda vez.
+- **A guarda da fatura decide quem grava o lançamento.** Não é um `if` sobre uma
+  leitura anterior — é o `UPDATE ... WHERE status = 'ABERTA'`. Quem consegue
+  mover a fatura ganha o direito de gravar; quem chega depois lê isso no número
+  de linhas afetadas. Ler antes seria uma corrida.
+- **`pendentes` chegou no step-03, e não no step-05.** A regra do projeto é que
+  cada método nasça junto com o teste que o prova, e são os testes de retorno que
+  conferem o que entrou no outbox. Deixá-lo para o step-05 obrigaria os quatro
+  testes a ler a tabela com SQL solto.
+- **Payload em JSON escrito à mão, com a leitura ao lado da escrita.** Dois
+  campos não pagam uma dependência de serialização; o que a gravação escreve, a
+  leitura devolve idêntico, e é essa ida e volta que o relay vai precisar.
+
+### Verificado
+
+- `mvn test` → 23 testes, 0 falhas (12 dos steps anteriores, 11 deste).
+- `RetornoDuplicadoTest`: a segunda aplicação devolve `IGNORADO` e o outbox
+  continua com **1** linha; o arquivo inteiro reprocessado não muda nada; linha
+  para tentativa inexistente é ignorada, não é erro.
+- `MultiplasTentativasTest`: recusa seguida de pagamento → **1** linha; duas
+  tentativas da mesma fatura que **ambas** pagam → **1** linha, com as duas
+  tentativas registradas como `PAGO`.
+- `DualWriteEvitadoTest`: com o `INSERT` do outbox estourando, o outbox fica
+  vazio, a fatura continua `ABERTA` e a tentativa continua `ENVIADO_PARCEIRO`;
+  reprocessar a mesma linha depois processa normal.
+- `RetornoAplicadoTest`: `NAO_PAGO` grava o motivo e não gera outbox; `ERRO`
+  resolve sem motivo e sem outbox; e por reflexão, `PublicadorLancamento` não é
+  campo nem parâmetro de construtor do use case.
+- **Teste de mutação manual**: removidas as duas guardas
+  (`AND status = 'ENVIADO_PARCEIRO'` e `AND status = 'ABERTA'`), a suíte falha
+  em 4 casos de `RetornoDuplicadoTest` e `MultiplasTentativasTest`. As guardas
+  sustentam os testes de verdade; os testes não passariam sem elas.
+
+AI: est 2h30 / actual 40min / ~95% generated / 2 issues caught in review
+
+<!--
+As 2: (1) `api/LinhaRetorno` como parâmetro do use case, como o step-03.md
+descrevia — faria `domain` importar `api` e quebraria a regra 3 do CLAUDE.md,
+que `FundacaoTest.dominioIsolado` verifica; virou `aplicarCom`, com a tradução
+no adaptador; (2) a regra "motivo existe se, e somente se, NAO_PAGO" ia ficar
+repetida em `TentativaDebito`, em `LinhaRetorno`, no use case e no schema —
+quatro cópias livres para divergirem, colapsadas em `exigirMotivoCoerente`.
+-->
+
 ## [step-02] — 2026-08-30 — Montagem de ciclo
 
 A escrita que importa. Tudo o que vem depois — remessa, retorno, fechamento,

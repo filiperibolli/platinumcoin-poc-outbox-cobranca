@@ -8,8 +8,11 @@ publicar.
 ## Entregáveis
 
 - `api/LinhaRetorno` — record da linha do arquivo de retorno
-  (`tentativaId`, `resultado`, `motivo`).
-- `domain/usecase/AplicarRetornoUseCase` — recebe linhas, faz a transição.
+  (`tentativaId`, `resultado`, `motivo`). É o adaptador de entrada: sabe se
+  traduzir numa chamada ao use case (`aplicarCom`), e por isso o domínio não
+  precisa importá-la — a seta continua `api → domain`.
+- `domain/usecase/AplicarRetornoUseCase` — um retorno por chamada, uma
+  transação por retorno: cada linha do arquivo é uma decisão independente.
 - `infra/persistence/RepositorioFaturaPostgres`,
   `infra/persistence/RepositorioOutboxPostgres` — JDBC puro
   (`RepositorioTentativaPostgres` vem do step-02).
@@ -51,11 +54,11 @@ responde sim.
 
 ## Definition of Done
 
-- [ ] Os quatro testes passam.
-- [ ] `RetornoDuplicadoTest` prova **1** linha no outbox para 2 aplicações.
-- [ ] `MultiplasTentativasTest` prova **1** linha no outbox para 2 tentativas.
-- [ ] `DualWriteEvitadoTest` prova que, com rollback forçado, o outbox está
+- [x] Os quatro testes passam.
+- [x] `RetornoDuplicadoTest` prova **1** linha no outbox para 2 aplicações.
+- [x] `MultiplasTentativasTest` prova **1** linha no outbox para 2 tentativas.
+- [x] `DualWriteEvitadoTest` prova que, com rollback forçado, o outbox está
       vazio, a fatura está `ABERTA` e a reexecução processa normal.
-- [ ] Um retorno `NAO_PAGO` não gera linha no outbox e grava o motivo.
-- [ ] `PublicadorLancamento` **não** é chamado por este use case.
-- [ ] CHANGELOG + commit `feat(outbox): aplicar retorno em transação única (step 03)`.
+- [x] Um retorno `NAO_PAGO` não gera linha no outbox e grava o motivo.
+- [x] `PublicadorLancamento` **não** é chamado por este use case.
+- [x] CHANGELOG + commit `feat(outbox): aplicar retorno em transação única (step 03)`.

@@ -57,6 +57,19 @@ public record TentativaDebito(
         public boolean geraLancamentoContabil() {
             return this == PAGO;
         }
+
+        /**
+         * Se este é um desfecho que o <b>parceiro</b> pode informar num arquivo
+         * de retorno.
+         *
+         * <p>{@code SEM_RETORNO} fica de fora porque não é afirmação de
+         * ninguém — é o que o fechamento do ciclo conclui do silêncio
+         * (step-04). Os estados anteriores ao envio ficam de fora porque uma
+         * linha de retorno não anda para trás.
+         */
+        public boolean vemDoRetorno() {
+            return this == PAGO || this == NAO_PAGO || this == ERRO;
+        }
     }
 
     /**
@@ -88,12 +101,26 @@ public record TentativaDebito(
         if (dataRef == null) {
             throw new IllegalArgumentException("tentativa " + id + " sem data de referência");
         }
-        // Espelha a constraint tentativa_motivo_so_com_nao_pago do schema: um
-        // NAO_PAGO sem motivo é um "não deu certo" que ninguém consegue explicar
-        // ao cliente, e um motivo em qualquer outro estado é invenção.
+        exigirMotivoCoerente("tentativa " + id, status, motivo);
+    }
+
+    /**
+     * Motivo existe se, e somente se, o status é {@code NAO_PAGO}.
+     *
+     * <p>Espelha a constraint {@code tentativa_motivo_so_com_nao_pago} do
+     * schema: um {@code NAO_PAGO} sem motivo é um "não deu certo" que ninguém
+     * consegue explicar ao cliente, e um motivo em qualquer outro estado é
+     * invenção.
+     *
+     * <p>É {@code static} para ter <b>um</b> dono. A mesma regra é cobrada de
+     * quem constrói uma tentativa, de quem lê uma linha de retorno e de quem
+     * aplica o resultado — três chamadores, uma frase. Repetida em cada um,
+     * seria três frases livres para divergirem.
+     */
+    public static void exigirMotivoCoerente(String contexto, Status status, MotivoNaoPago motivo) {
         if ((status == Status.NAO_PAGO) != (motivo != null)) {
             throw new IllegalArgumentException(
-                    "tentativa " + id + ": motivo existe se, e somente se, o status é NAO_PAGO"
+                    contexto + ": motivo existe se, e somente se, o status é NAO_PAGO"
                             + " (status=" + status + ", motivo=" + motivo + ")");
         }
     }
