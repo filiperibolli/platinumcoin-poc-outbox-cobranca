@@ -20,6 +20,7 @@
     <postgresql.version>42.7.4</postgresql.version>
     <slf4j.version>2.0.13</slf4j.version>
     <sshj.version>0.38.0</sshj.version>
+    <spring.boot.version>3.5.3</spring.boot.version>
     <exec.mainClass>com.platinumcoin.outbox.Main</exec.mainClass>
 
     <!-- Versão da API do daemon Docker usada pelo Testcontainers.
@@ -43,6 +44,13 @@
         <groupId>org.testcontainers</groupId>
         <artifactId>testcontainers-bom</artifactId>
         <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring.boot.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -84,7 +92,23 @@
       <version>${postgresql.version}</version>
     </dependency>
 
-    <!-- Sem Spring Boot: JDBC puro, sem pool, sem container de injeção. -->
+    <!-- O Spring Boot entra no step-10, e por um motivo só: o projeto passa a
+         expor HTTP. Web e nada mais — a persistência continua JDBC puro, sem
+         starter de dados, sem pool e sem ORM. O logging do starter fica de
+         fora: o binding do projeto é o slf4j-simple do step-08, e dois
+         bindings no classpath é um aviso a cada execução.
+         DECISÃO: um único Spring Boot, e só por HTTP — ver docs/steps/step-10.md -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-starter-logging</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
@@ -119,6 +143,13 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.13.0</version>
+        <configuration>
+          <!-- Os nomes dos parâmetros no bytecode. Sem isto, o Spring não sabe
+               que `@RequestParam int quantidade` se chama "quantidade" e recusa
+               toda chamada com 400. As rotas nomeiam os seus parâmetros à mão
+               de qualquer forma; esta linha é o cinto além do suspensório. -->
+          <parameters>true</parameters>
+        </configuration>
       </plugin>
       <!-- `mvn compile exec:java` roda o cenário do step-06 contra o ambiente do
            docker-compose. A classe vem da propriedade exec.mainClass, e a versão
@@ -129,6 +160,17 @@
         <version>3.5.0</version>
         <configuration>
           <mainClass>${exec.mainClass}</mainClass>
+        </configuration>
+      </plugin>
+      <!-- `mvn spring-boot:run` sobe a API do step-10 contra o ambiente do
+           docker-compose. Sem execução de `repackage` ligada: o artefato deste
+           projeto continua sendo um jar comum. -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring.boot.version}</version>
+        <configuration>
+          <mainClass>com.platinumcoin.outbox.AplicacaoHttp</mainClass>
         </configuration>
       </plugin>
       <plugin>
