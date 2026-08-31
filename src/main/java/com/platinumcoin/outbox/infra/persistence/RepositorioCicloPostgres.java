@@ -100,9 +100,28 @@ public final class RepositorioCicloPostgres implements RepositorioCiclo {
 
     @Override
     public int fechar(Transacao tx, String cicloId) {
-        // O fechamento é o step-04. Deixar o método declarado e não implementado
-        // é preferível a um SQL sem teste que nasce parecendo pronto.
-        throw new UnsupportedOperationException("fechamento de ciclo chega no step-04");
+        // DECISÃO: ausência de retorno vira SEM_RETORNO, não NAO_PAGO — marcar
+        // como não pago dispararia notificação de falha ao cliente com base em
+        // um fato que não ocorreu. SEM_RETORNO é exceção operacional. Ver README.
+        String semRetorno = """
+                UPDATE tentativa_debito SET status = 'SEM_RETORNO'
+                 WHERE ciclo_id = ? AND status = 'ENVIADO_PARCEIRO'
+                """;
+        String fechado = "UPDATE ciclo_cobranca SET status = 'FECHADO' WHERE id = ?";
+        Connection conexao = TransacaoJdbc.conexaoDe(tx);
+        try (PreparedStatement pendentes = conexao.prepareStatement(semRetorno);
+             PreparedStatement ciclo = conexao.prepareStatement(fechado)) {
+            pendentes.setString(1, cicloId);
+            // A guarda por ENVIADO_PARCEIRO é o que torna o refechamento inócuo:
+            // quem já tem desfecho não é tocado, e o segundo fechamento afeta
+            // zero linhas em vez de sobrescrever resultados que o parceiro deu.
+            int afetadas = pendentes.executeUpdate();
+            ciclo.setString(1, cicloId);
+            ciclo.executeUpdate();
+            return afetadas;
+        } catch (SQLException e) {
+            throw new FalhaDePersistencia("falha ao fechar o ciclo " + cicloId, e);
+        }
     }
 
     private static Optional<CicloCobranca> primeiro(PreparedStatement stmt) throws SQLException {

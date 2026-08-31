@@ -27,7 +27,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   Testes: `RetornoAplicadoTest`, `RetornoDuplicadoTest`, `MultiplasTentativasTest`,
   `DualWriteEvitadoTest`.
 
-- [ ] **step-04 — Fechamento de ciclo** · [docs/steps/step-04.md](docs/steps/step-04.md)
+- [x] **step-04 — Fechamento de ciclo** · [docs/steps/step-04.md](docs/steps/step-04.md)
   `FecharCicloUseCase`. Quem continua `ENVIADO_PARCEIRO` vira `SEM_RETORNO` —
   nunca `NAO_PAGO`. Silêncio não é resposta.
   Teste: `FechamentoNaoInventaResultadoTest`.
@@ -102,8 +102,7 @@ Main                (06)
 ```
 
 Já existem: os sete modelos, as seis portas, a exceção, os use cases de
-montagem, de geração de remessa e de aplicação de retorno, a `api/LinhaRetorno`
-e, em `infra/persistence`, o `TransacaoJdbc` mais os quatro repositórios. Falta
-implementar `RepositorioCiclo.fechar` (step-04) e
-`RepositorioOutbox.marcarPublicado` (step-05) — cada um chega junto com o teste
-que o prova.
+montagem, de geração de remessa, de aplicação de retorno e de fechamento de
+ciclo, a `api/LinhaRetorno` e, em `infra/persistence`, o `TransacaoJdbc` mais os
+quatro repositórios. Falta implementar `RepositorioOutbox.marcarPublicado`
+(step-05) — ele chega junto com o teste que o prova.
