@@ -246,30 +246,56 @@ contagem final precisa ser dele. É o único lugar do projeto que apaga dados.
 
 ### Operar o ciclo pela API
 
-> Planejado nos steps 10–12 — ver [PLAN.md](PLAN.md). O que segue é o desenho
-> acordado, não código já escrito.
+Com o Compose no ar, o servidor sobe e cada passo do ciclo vira uma chamada:
 
-Cada passo do ciclo é um `POST`, e **cada chamada é uma execução do job**. Não há
-cron nem `@Scheduled` neste projeto: em produção quem chama é o EventBridge, nos
-horários do diagrama acima; aqui quem chama é um botão. Ter tirado o horário do
-código é o que permite executar um passo justamente quando se quer olhar para
-ele.
+```bash
+docker compose -f infra/docker-compose.yml up -d
+mvn spring-boot:run
+```
+
+**Cada chamada é uma execução do job.** Não há cron nem `@Scheduled` neste
+projeto: em produção quem chama é o EventBridge, nos horários do diagrama acima;
+aqui quem chama é um botão. Ter tirado o horário do código é o que permite
+executar um passo justamente quando se quer olhar para ele.
 
 ```
-POST /faturas              cria N faturas de teste com tentativas ABERTO
-POST /ciclo/montar         MontarCiclo
-POST /ciclo/gerar-remessa  GerarRemessa      → artefato no S3
-POST /ciclo/enviar         EnviarRemessa     → arquivo no SFTP do parceiro
-POST /ciclo/coletar        ColetarRetorno    → quiescência + trailer
-POST /ciclo/fechar         FecharCiclo       → SEM_RETORNO
-POST /outbox/publicar      PublicarOutbox    → relay
-GET  /estado               snapshot: banco, outbox, SFTP, S3 e fila
+POST /faturas?quantidade=3&banco=341&data=2026-09-01  faturas com tentativas ABERTO
+POST /ciclo/montar?ciclo=C-1&banco=341&data=...       MontarCiclo
+POST /ciclo/gerar-remessa?ciclo=C-1                   GerarRemessa   → artefato no S3
+POST /ciclo/enviar?ciclo=C-1                          EnviarRemessa  → arquivo no SFTP
+POST /ciclo/coletar                                   ColetarRetorno → quiescência + trailer
+POST /ciclo/fechar?ciclo=C-1                          FecharCiclo    → SEM_RETORNO
+POST /outbox/publicar?limite=50                       PublicarOutbox → relay
+GET  /estado                                          banco, outbox, SFTP, S3 e fila
 ```
+
+Tudo é `POST`, inclusive o que parece leitura: cada chamada **executa um job** e
+tem efeito, e um `GET` que muda estado é uma armadilha para qualquer coisa que
+pré-busque links. `/estado` é o único `GET`, e é o único sem efeito.
+
+A coleta não recebe o ciclo de propósito: ela varre o diretório do parceiro, e
+de que recorte é cada arquivo quem diz é o header dele — o parceiro não garante
+um arquivo por ciclo.
 
 Cada resposta traz **o efeito produzido** — contagens e transições —, não um
-`200` vazio. "Montou C-1 e moveu 5 tentativas" é informação; "montou" não é.
+`200` vazio. "Montou C-1 e moveu 3 tentativas" é informação; "montou" não é:
 
-E, do outro lado do fio, o **simulador do parceiro**:
+```bash
+curl -sX POST 'localhost:8080/ciclo/montar?ciclo=C-1&banco=341&data=2026-09-01'
+{"cicloId":"C-1","banco":"341","dataRef":"2026-09-01","status":"MONTADO","solicitadas":3}
+
+curl -sX POST 'localhost:8080/ciclo/gerar-remessa?ciclo=C-1'
+{"cicloId":"C-1","chave":"remessa/341/20260901/C-1.rem","sha256":"7f1e...","detalhes":3,"bytes":168}
+
+curl -sX POST 'localhost:8080/outbox/publicar'
+{"publicados":1,"chavesDedup":["F-20260901-1"]}
+```
+
+A recusa também é efeito: montar o mesmo recorte duas vezes devolve `409` com o
+motivo intacto — o `UNIQUE (banco, data_ref)` fazendo o seu trabalho, e não um
+`if` no controller.
+
+E, do outro lado do fio, o **simulador do parceiro** — step-11, ainda plano:
 
 ```
 POST /parceiro/processar         lê a remessa e escreve o retorno
@@ -287,9 +313,10 @@ retorno a partir da remessa que leu do SFTP, como o banco parceiro faria.
 Consultar o Postgres para produzir o retorno seria mais simples e destruiria o
 valor da demonstração.
 
-O painel (`GET /`) é um único arquivo HTML servido pelo Spring, sem build e sem
-CDN: botões na ordem do fluxo, uma seção separada para provocar falhas, o estado
-das cinco fontes por polling de 2s e um log append-only de cada transição.
+O painel (`GET /`) — step-12, também plano — é um único arquivo HTML servido
+pelo Spring, sem build e sem CDN: botões na ordem do fluxo, uma seção separada
+para provocar falhas, o estado das cinco fontes por polling de 2s e um log
+append-only de cada transição.
 
 ### Inspecionar a fila enquanto roda
 
@@ -414,14 +441,17 @@ src/main/java/...
   domain/port            RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
                          RepositorioOutbox, PublicadorLancamento,
                          ArmazenamentoArtefato, CanalArquivos
-  domain/usecase         MontarCiclo, GerarRemessa, EnviarRemessa,
-                         ColetarRetorno, AplicarRetorno, FecharCiclo,
-                         PublicarOutbox
+  domain/usecase         AbrirFaturas, MontarCiclo, GerarRemessa,
+                         EnviarRemessa, ColetarRetorno, AplicarRetorno,
+                         FecharCiclo, PublicarOutbox
   api                    LinhaRetorno, ArquivoRetorno — adaptadores de entrada
   api/http               um controller por passo; nenhuma regra de negócio
+  api/http/dto           os records de resposta: o efeito, não `200`
   infra/persistence      JDBC puro, uma implementação por porta
   infra/canal            CanalArquivosSftp — SSH de verdade
   infra/config           Ambiente — o único lugar que lê configuração
+                         Fiacao — os mesmos objetos do Main, para o Spring
+  infra/consulta         EstadoDoMundo — o retrato das cinco fontes
   simulador/             o banco parceiro e as falhas provocáveis
                          — o AMBIENTE, não o sistema
   Main                   o cenário ponta a ponta, com cada transição impressa
@@ -429,10 +459,10 @@ src/main/java/...
 src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
 
-Os pacotes `api/http`, `simulador/` e o painel são os steps 10–12; a coleta do
-retorno é o step-09. O armazenamento no S3 e a transmissão por SFTP já existem —
-são os steps 07 e 08. Ver [PLAN.md](PLAN.md) para o que já está escrito e o que
-ainda é plano.
+O `simulador/` e o painel são os steps 11 e 12 — plano, não código. O resto
+existe: `api/http` mais o `AplicacaoHttp` são o step-10, a coleta do retorno é o
+step-09, e o armazenamento no S3 e a transmissão por SFTP são os steps 07 e 08.
+Ver [PLAN.md](PLAN.md) para o que já está escrito e o que ainda é plano.
 
 Máquina de estados:
 

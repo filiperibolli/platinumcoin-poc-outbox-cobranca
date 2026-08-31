@@ -121,7 +121,7 @@ class FundacaoTest extends AmbienteDeTeste {
     }
 
     @Test
-    @DisplayName("o domínio não conhece framework nem AWS SDK")
+    @DisplayName("o domínio não conhece Spring, AWS SDK nem biblioteca SSH")
     void dominioIsolado() throws IOException {
         Path dominio = Path.of("src", "main", "java", "com", "platinumcoin", "outbox", "domain");
         List<String> proibidos = new ArrayList<>();
@@ -142,6 +142,9 @@ class FundacaoTest extends AmbienteDeTeste {
         }
 
         assertEquals(List.of(), proibidos,
-                "api → domain ← infra: o domínio só pode importar java.* e ele mesmo");
+                "api → domain ← infra: o domínio só pode importar java.* e ele mesmo."
+                        + " O Spring entrou no step-10 por um motivo único — expor HTTP —"
+                        + " e a lista branca abaixo é o que garante que ele parou em api/http"
+                        + " e na fiação");
     }
 }

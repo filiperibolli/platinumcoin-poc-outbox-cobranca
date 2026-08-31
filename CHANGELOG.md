@@ -3,6 +3,145 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-10] — 2026-08-31 — API de operação do ciclo
+
+O mecanismo deixa de ser deduzido de uma suíte verde e passa a ser **disparável
+passo a passo**. Sete `POST` e um `GET`: cada chamada executa o job que, em
+produção, o EventBridge dispararia por horário, e cada resposta diz o que
+aconteceu com o mundo.
+
+É o step em que o Spring Boot entra, e o motivo é único e declarado: **o projeto
+passa a expor HTTP.** Nenhuma outra parte do desenho mudou por causa dele — o
+domínio continua sem framework, os use cases continuam os mesmos, e o `Main` de
+console dos steps 01–06 continua rodando sem uma linha alterada.
+
+| chamada | dispara | a resposta afirma |
+|---|---|---|
+| `POST /faturas` | — | as faturas que passaram a existir |
+| `POST /ciclo/montar` | `MontarCiclo` | o ciclo e quantas tentativas ele puxou |
+| `POST /ciclo/gerar-remessa` | `GerarRemessa` | chave, `sha256` e a contagem do trailer |
+| `POST /ciclo/enviar` | `EnviarRemessa` | o nome do arquivo no parceiro |
+| `POST /ciclo/coletar` | `ColetarRetorno` | um item por arquivo **visto**, com o desfecho |
+| `POST /ciclo/fechar` | `FecharCiclo` | quantas viraram `SEM_RETORNO` |
+| `POST /outbox/publicar` | `PublicarOutbox` | as chaves de dedup que foram para a fila |
+| `GET /estado` | — | o retrato das cinco fontes |
+
+### Adicionado
+
+- **Spring Boot (Web) no `pom.xml`** — só `spring-boot-starter-web`, e sem o
+  starter de logging: o binding do projeto continua sendo o `slf4j-simple` do
+  step-08, e dois bindings no classpath é um aviso a cada execução. Sem starter
+  de dados: a persistência continua JDBC puro, sem pool e sem ORM.
+- **`AplicacaoHttp`** — o `main` do servidor. Um processo, todos os endpoints,
+  inclusive os do simulador do step-11 quando ele chegar.
+- **`infra/config/Fiacao`** — a continuação do `Ambiente`: ele responde "com que
+  banco, com que fila, com que bucket e com que parceiro", e ela responde "que
+  objetos falam com eles". É o único arquivo de `infra/` que conhece o Spring, e
+  não decide nada — sem `@Value`, sem perfil, sem condicional.
+- **Oito controllers em `api/http`**, um por passo. Cada um desserializa, chama
+  **um** use case e serializa o efeito.
+- **`api/http/dto`** — sete records de resposta. Cada campo é uma afirmação sobre
+  o mundo depois da chamada, não sobre a chamada.
+- **`AbrirFaturasUseCase`** — o estado inicial, que num sistema de verdade viria
+  da originação. Existe como use case, e não como `INSERT` dentro do controller,
+  pela regra que vale para os outros sete: operação inbound tem um lugar com
+  nome. Os ids saem da data de referência (`F-20260901-1`), e o teto de 99 mora
+  onde o id nasce — o campo posicional da remessa reserva 16 posições para o da
+  tentativa.
+- **`api/http/Recorte`** — os padrões da demonstração num lugar só. Espalhados
+  por dois controllers, o dia em que divergissem produziria faturas num recorte e
+  um ciclo noutro: o ciclo montaria vazio e nada acusaria.
+- **`api/http/ChavesPublicadas`** — o publicador anotando o que saiu. É o mesmo
+  recurso que o `Main` usa para narrar o `send`.
+- **`api/http/FalhasComoResposta`** — a recusa também é efeito. A segunda
+  montagem do mesmo recorte devolve `409` com o motivo intacto, em vez de um
+  corpo genérico que esconderia a constraint fazendo o seu trabalho.
+- **`infra/consulta/EstadoDoMundo`** — banco, outbox, diretório do parceiro,
+  bucket e fila num retrato só.
+- **`<parameters>true</parameters>` no compilador** — os nomes dos parâmetros no
+  bytecode. As rotas nomeiam os seus à mão de qualquer forma; a linha é o cinto
+  além do suspensório.
+- **`EndpointsDevolvemEfeitoTest`** (9) — o ciclo inteiro por HTTP de verdade,
+  na ordem, contra os containers. Cada contagem que a API devolve é conferida
+  contra o banco, contra o diretório do parceiro ou contra a fila.
+- **`ControllerNaoDecideTest`** (4) e **`ClienteHttp`** (teste) — a fronteira e o
+  cliente que fala por soquete, sem atalho de framework.
+
+### Decisões
+
+- **Todos `POST`, inclusive os que parecem leitura.** Cada chamada executa um
+  job e tem efeito. Um `GET` que muda estado é uma armadilha para qualquer coisa
+  que pré-busque links; `/estado` é o único `GET`, e é o único sem efeito.
+- **A resposta é o efeito, não `200`.** "Montou" não é informação; "montou C-1 e
+  moveu 3 tentativas" é. É o que torna o `curl` sozinho suficiente para entender
+  o que aconteceu, e o que vai permitir ao painel do step-12 ter um log de
+  eventos sem inventar texto.
+- **O que se proíbe no controller é o *acesso*, não a intenção.** A erosão não
+  começa com uma decisão grande: começa com um `PreparedStatement` "só para
+  conferir uma coisa antes de chamar o use case". Sem `java.sql` e sem SDK, o
+  controller não tem com o que decidir — e é isso que `ControllerNaoDecideTest`
+  cobra.
+- **O `/estado` não passa pelo domínio.** É leitura de operação: nenhuma regra
+  deste projeto pergunta quantos objetos há no bucket. Acrescentar `listar()` ao
+  `ArmazenamentoArtefato` para servir uma tela colocaria no domínio uma pergunta
+  que nenhuma decisão faz — e a porta do step-07 nasceu sem `list` e sem
+  `delete` exatamente para não convidar esse acréscimo. O parceiro é a exceção:
+  ali a leitura já é porta desde o step-09, e abrir uma segunda conexão SSH só
+  para a tela seria um caminho paralelo ao que a coleta usa.
+- **O relay é montado por passada, e é o único.** As chaves que foram para a
+  fila só são conhecidas por quem publica. Montá-las a partir do outbox diria o
+  que estava pendente *antes* da passada — outra afirmação, e mentirosa
+  justamente na passada em que o relay morre no meio.
+- **A coleta não recebe ciclo.** Ela varre o diretório; de que recorte é cada
+  arquivo quem diz é o header dele. Pedir o ciclo seria supor que o parceiro
+  respeita a nossa contagem, e o step-09 existe porque ele não respeita.
+- **Os ids das faturas saem da data, não de um sorteio.** A segunda chamada no
+  mesmo recorte esbarra na chave primária, como a segunda montagem esbarra no
+  `UNIQUE (banco, data_ref)`. Reexecutar é recusado por construção nos dois
+  lugares, e pela mesma razão.
+- **Um único Spring Boot para tudo.** Os endpoints do simulador do step-11
+  ficarão num pacote separado e no mesmo processo: dois processos exigiriam
+  orquestração para uma demonstração que cabe numa tela.
+- **O `Main` não foi tocado.** Console e HTTP entram pelo mesmo `Ambiente` e
+  montam os mesmos objetos; o cenário do step-06 continua sendo a narrativa
+  escrita, e os endpoints são o mesmo ciclo sob controle manual.
+
+### Verificado
+
+- `mvn test` → 71 testes, 0 falhas (58 dos steps anteriores, 13 deste).
+- `CenarioPontaAPontaTest` continua verde **sem uma linha alterada** no `Main` —
+  é a prova de que o console não mudou de comportamento.
+- `FundacaoTest.dominioIsolado` continua verde com o Spring no classpath: a
+  lista branca do domínio (`java.*` e ele mesmo) já proibia
+  `org.springframework`, e agora a mensagem diz isso em voz alta.
+- `ControllerNaoDecideTest` confere as duas fronteiras do step e mais duas: um
+  use case por controller, e as oito rotas publicadas.
+- O ciclo inteiro por HTTP roda em ~22s na suíte, quiescência incluída.
+
+AI: est 2h30 / actual 40min / ~100% generated / 2 issues caught in review
+
+<!--
+O 1: o teste registrava o `Ambiente` dos containers com
+`registerSingleton("ambiente", ...)` antes do refresh. O `@Bean ambiente()` da
+`Fiacao` tem o mesmo nome, e `registerBeanDefinition` chama `resetBeanDefinition`
+— que **apaga** o singleton manual. O servidor subiu apontado para
+`localhost:4566` e o teste morreu com "Connection refused" na criação do
+publicador. A correção é um `registerBean` primário com nome próprio, que é o
+seam que o Spring oferece de verdade.
+
+O 2: sem `-parameters`, o Spring não descobre o nome de `@RequestParam int
+quantidade` e recusa a chamada com `IllegalArgumentException` — que
+`FalhasComoResposta` traduziu em `400`, e o teste só afirmava o status. Oito
+falhas idênticas e nenhuma pista. Duas correções: a flag no compilador e o corpo
+da resposta na mensagem da asserção, para que a próxima recusa se explique
+sozinha.
+
+O `ColetarRetornoController` usa quiescência de 1s, vinda de uma constante da
+`Fiacao` e não do `Ambiente`: é um valor de desenho da demonstração, não
+configuração — quem clica o botão é gente. Se um dia precisar variar por
+ambiente, muda de lugar.
+-->
+
 ## [step-09] — 2026-08-31 — Coleta de retorno com quiescência e trailer
 
 "Sem callback" deixa de ser uma frase sobre o parceiro e vira três mecanismos no

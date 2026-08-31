@@ -69,7 +69,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   `ArquivoEmEscritaNaoEhBaixadoTest`, `RetornoParticionadoTest`,
   `ReenvioDeRetornoTest`.
 
-- [ ] **step-10 — API de operação** · [docs/steps/step-10.md](docs/steps/step-10.md)
+- [x] **step-10 — API de operação** · [docs/steps/step-10.md](docs/steps/step-10.md)
   Spring Boot (Web) entra aqui, e só por isto: o projeto passa a expor HTTP.
   Um `POST` por passo do ciclo, cada resposta descrevendo o efeito produzido;
   `GET /estado` com o snapshot das cinco fontes. Cada chamada é uma execução
@@ -158,10 +158,11 @@ domain/port/        RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
 domain/usecase/     MontarCicloUseCase (02), GerarRemessaUseCase (02, grava em 07),
                     AplicarRetornoUseCase (03), FecharCicloUseCase (04),
                     PublicarOutboxUseCase (05), EnviarRemessaUseCase (08),
-                    ColetarRetornoUseCase (09)
+                    ColetarRetornoUseCase (09), AbrirFaturasUseCase (10)
 domain/exception/   FalhaDePersistencia, FalhaDePublicacao (05)
 api/                LinhaRetorno (03), ArquivoRetorno (09) — parser e trailer
-api/http/           um controller por passo (10) + DTOs de efeito
+api/http/           um controller por passo (10) + DTOs de efeito;
+                    Recorte, ChavesPublicadas, FalhasComoResposta (10)
 infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
                     RepositorioCicloPostgres, RepositorioTentativaPostgres,
                     RepositorioOutboxPostgres, PublicadorLancamentoSqs (05),
@@ -170,6 +171,8 @@ infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
 infra/canal/        CanalArquivosSftp (08)
 infra/falha/        decoradores das falhas provocáveis (11)
 infra/config/       Ambiente (05) — DataSource + SqsClient + S3Client + SFTP
+                    Fiacao (10) — os mesmos objetos do Main, para o Spring
+infra/consulta/     EstadoDoMundo (10) — o retrato das cinco fontes
 simulador/          ParceiroSimulado e seus endpoints (11) — o ambiente, não o sistema
 resources/static/   index.html — o painel (12)
 Main                (06) — o cenário de console, que continua existindo
@@ -181,7 +184,7 @@ cinco use cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o
 `TransacaoJdbc`, os quatro repositórios, o `Payload`, o
 `PublicadorLancamentoSqs` e o `Main`, que amarra as peças num cenário só.
 
-O que está marcado com (07) a (12) é plano, não código. A régua para julgá-lo é
+O que está marcado com (11) e (12) é plano, não código. A régua para julgá-lo é
 a mesma: cada arquivo com uma responsabilidade que dá para nomear sem usar "e".
 Se um step apertar, corta-se **escopo** — regra de negócio, canal, formato —
 nunca os testes de falha.
