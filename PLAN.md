@@ -19,7 +19,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   `GerarRemessaUseCase` projeta a remessa — função pura do ciclo.
   Testes: `MontagemDeterministicaTest`, `TrabalhoDerivadoDeterministicoTest`.
 
-- [ ] **step-03 — Aplicar retorno** · [docs/steps/step-03.md](docs/steps/step-03.md)
+- [x] **step-03 — Aplicar retorno** · [docs/steps/step-03.md](docs/steps/step-03.md)
   `AplicarRetornoUseCase`. Transição por UPDATE condicional
   (`WHERE id = ? AND status = 'ENVIADO_PARCEIRO'`). Na **mesma** transação:
   fatura vira `PAGA` e uma linha entra no `outbox` — **só quando o desfecho é
@@ -102,7 +102,8 @@ Main                (06)
 ```
 
 Já existem: os sete modelos, as seis portas, a exceção, os use cases de
-montagem e de geração de remessa, e em `infra/persistence` o `TransacaoJdbc`
-mais os repositórios de ciclo e de tentativa. Os métodos de retorno (step-03) e
-de fechamento (step-04) desses repositórios ainda não têm implementação — cada
-um chega junto com o teste que o prova.
+montagem, de geração de remessa e de aplicação de retorno, a `api/LinhaRetorno`
+e, em `infra/persistence`, o `TransacaoJdbc` mais os quatro repositórios. Falta
+implementar `RepositorioCiclo.fechar` (step-04) e
+`RepositorioOutbox.marcarPublicado` (step-05) — cada um chega junto com o teste
+que o prova.

@@ -88,9 +88,24 @@ public final class RepositorioTentativaPostgres implements RepositorioTentativa 
     public int registrarResultado(Transacao tx, String tentativaId,
                                   TentativaDebito.Status resultado,
                                   TentativaDebito.MotivoNaoPago motivo) {
-        // O UPDATE condicional do retorno é o step-03, e ele nasce junto com os
-        // testes que provam a idempotência — não antes deles.
-        throw new UnsupportedOperationException("aplicação de retorno chega no step-03");
+        // A guarda AND status = 'ENVIADO_PARCEIRO' É a idempotência: quem já
+        // recebeu desfecho não recebe outro, e o número de linhas afetadas
+        // conta ao use case qual dos dois casos aconteceu. Sem tabela de
+        // dedup, que seria um segundo lugar para a mesma verdade envelhecer.
+        // DECISÃO: UPDATE condicional em vez de tabela de dedup — ver README
+        String sql = """
+                UPDATE tentativa_debito SET status = ?, motivo = ?
+                 WHERE id = ? AND status = 'ENVIADO_PARCEIRO'
+                """;
+        try (PreparedStatement stmt = TransacaoJdbc.conexaoDe(tx).prepareStatement(sql)) {
+            stmt.setString(1, resultado.name());
+            stmt.setString(2, motivo == null ? null : motivo.name());
+            stmt.setString(3, tentativaId);
+            return stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new FalhaDePersistencia(
+                    "falha ao registrar o resultado da tentativa " + tentativaId, e);
+        }
     }
 
     private static TentativaDebito ler(ResultSet rs) throws SQLException {
