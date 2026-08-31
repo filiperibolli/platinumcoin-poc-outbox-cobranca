@@ -20,6 +20,9 @@ import com.platinumcoin.outbox.domain.usecase.GerarRemessaUseCase;
 import com.platinumcoin.outbox.domain.usecase.MontarCicloUseCase;
 import com.platinumcoin.outbox.infra.canal.CanalArquivosSftp;
 import com.platinumcoin.outbox.infra.consulta.EstadoDoMundo;
+import com.platinumcoin.outbox.infra.falha.FalhasArmadas;
+import com.platinumcoin.outbox.infra.falha.MorreAoMarcarPublicado;
+import com.platinumcoin.outbox.infra.falha.MorreAoRegistrarEnvio;
 import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
 import com.platinumcoin.outbox.infra.persistence.PublicadorLancamentoSqs;
 import com.platinumcoin.outbox.infra.persistence.RepositorioArquivoRetornoPostgres;
@@ -80,14 +83,38 @@ public class Fiacao {
         return new RepositorioTentativaPostgres(ambiente.dados());
     }
 
+    /**
+     * O que está armado para quebrar na próxima execução de um passo — step-11.
+     *
+     * <p>Só existe na fiação do servidor. O {@code Main} de console não o
+     * conhece: lá o crash do relay é provocado pelo mesmo tipo de decorador,
+     * montado no cenário.
+     */
     @Bean
-    public RepositorioCiclo ciclos(Ambiente ambiente) {
-        return new RepositorioCicloPostgres(ambiente.dados());
+    public FalhasArmadas falhasArmadas() {
+        return new FalhasArmadas();
     }
 
+    /**
+     * O repositório do ciclo, envolvido pela falha que mata o processo entre o
+     * {@code put} no parceiro e o {@code COMMIT}.
+     *
+     * <p>O decorador entra <b>aqui</b>, e não dentro de
+     * {@code EnviarRemessaUseCase}: um {@code if} de simulação no use case
+     * colocaria no código de produção uma linha que só existe para a
+     * demonstração — e o código de produção é justamente o que se quer olhar.
+     * Enquanto nada está armado, os dois decoradores apenas delegam.
+     * <br>DECISÃO: as falhas provocadas são decoradores da porta — ver docs/steps/step-11.md
+     */
     @Bean
-    public RepositorioOutbox outbox(Ambiente ambiente) {
-        return new RepositorioOutboxPostgres(ambiente.dados());
+    public RepositorioCiclo ciclos(Ambiente ambiente, FalhasArmadas falhas) {
+        return new MorreAoRegistrarEnvio(new RepositorioCicloPostgres(ambiente.dados()), falhas);
+    }
+
+    /** O outbox, envolvido pela falha que mata o relay entre o {@code send} e o {@code UPDATE}. */
+    @Bean
+    public RepositorioOutbox outbox(Ambiente ambiente, FalhasArmadas falhas) {
+        return new MorreAoMarcarPublicado(new RepositorioOutboxPostgres(ambiente.dados()), falhas);
     }
 
     @Bean

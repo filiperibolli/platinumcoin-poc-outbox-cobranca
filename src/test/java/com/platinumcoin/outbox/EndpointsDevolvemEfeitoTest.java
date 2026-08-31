@@ -12,12 +12,6 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
-import com.platinumcoin.outbox.infra.config.Ambiente;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
-import org.springframework.context.ApplicationContextInitializer;
-import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.context.support.GenericApplicationContext;
 import software.amazon.awssdk.services.sqs.model.Message;
 
 import java.sql.Connection;
@@ -60,21 +54,11 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
     private static final String RECUSADA = "F-20260901-2";
     private static final String SILENCIOSA = "F-20260901-3";
 
-    private static ConfigurableApplicationContext servidor;
+    private static ServidorDeTeste servidor;
     private static ClienteHttp cliente;
     private static DiretorioDoParceiro parceiro;
 
-    /**
-     * Sobe o servidor de verdade numa porta livre, apontado para os mesmos
-     * containers.
-     *
-     * <p>O {@link Ambiente} da suíte é registrado como bean primário antes do
-     * refresh, e por isso a {@code Fiacao} monta os use cases contra o
-     * Postgres, o LocalStack e o SFTP dos containers — pela mesma razão que o
-     * {@code CenarioPontaAPontaTest} entrega o {@code Ambiente} ao {@code Main}:
-     * uma fiação de teste escrita à parte diverge da de produção sem que nada
-     * acuse.
-     */
+    /** Sobe o servidor de verdade numa porta livre, apontado para os mesmos containers. */
     @BeforeAll
     static void subirServidor() throws SQLException {
         limparTabelas();
@@ -83,18 +67,8 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
         parceiro.limpar(DIRETORIO_REMESSA);
         parceiro.limpar(DIRETORIO_RETORNO);
 
-        ApplicationContextInitializer<GenericApplicationContext> apontarParaOsContainers =
-                contexto -> contexto.registerBean("ambienteDosContainers", Ambiente.class,
-                        AmbienteDeTeste::ambiente, definicao -> definicao.setPrimary(true));
-
-        SpringApplication aplicacao = new SpringApplication(AplicacaoHttp.class);
-        // Porta zero: a suíte não pode brigar por 8080 com o que estiver rodando.
-        aplicacao.setDefaultProperties(Map.of("server.port", "0"));
-        aplicacao.addInitializers(apontarParaOsContainers);
-        servidor = aplicacao.run();
-
-        cliente = new ClienteHttp(
-                ((ServletWebServerApplicationContext) servidor).getWebServer().getPort());
+        servidor = ServidorDeTeste.subir();
+        cliente = servidor.cliente();
     }
 
     @AfterAll

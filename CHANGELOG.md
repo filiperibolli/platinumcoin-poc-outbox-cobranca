@@ -3,6 +3,134 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-11] — 2026-08-31 — Simulador do parceiro e provocação de falhas
+
+As falhas que o desenho defende deixam de morar em classes de teste e passam a
+ser **reproduzíveis por botão**. Quem quiser ver o retorno truncado sendo
+descartado, ou o relay morrendo entre o `send` e o `UPDATE`, faz um `POST` — e
+vê, entre uma chamada e outra, o estado que a janela produz.
+
+E o arquivo de retorno deixa de ser depositado pela suíte: ele nasce do outro
+lado do fio. O simulador **lê a remessa do SFTP** e responde sobre as tentativas
+que encontrou nela. É a volta fechando — até aqui o projeto provava que sabia
+ler um retorno; agora ele mostra o retorno sendo escrito.
+
+| chamada | o mecanismo que fica visível |
+|---|---|
+| `POST /parceiro/processar` | o caminho feliz, e que só `PAGO` gera linha no outbox |
+| `…?particionar=3` | vários arquivos por ciclo convergindo para o mesmo estado |
+| `…?atrasar=true` | o retorno pela metade; o resto continua `ENVIADO_PARCEIRO` |
+| `POST /parceiro/reenviar-retorno` | os mesmos bytes reconhecidos pelo `sha256` |
+| `POST /parceiro/retorno-truncado` | trailer que não fecha, arquivo descartado inteiro |
+| `POST /parceiro/silencio` | `SEM_RETORNO` no fechamento — silêncio não é recusa |
+| `POST /falha/crash-relay` | at-least-once: duas mensagens, uma `chaveDedup` |
+| `POST /falha/crash-envio` | a janela entre efeito externo e commit |
+
+### Adicionado
+
+- **`simulador/ParceiroSimulado`** — as quatro formas de o parceiro se
+  comportar: responder, repetir a resposta, responder pela metade, e não
+  responder. Nada é sorteado: o desfecho vem da distribuição pedida, aplicada na
+  ordem do arquivo. Uma demonstração que muda a cada execução não prova nada.
+- **`simulador/RemessaLida`** — o que o parceiro entende do arquivo que recebeu.
+  É o coração da decisão do step: o retorno é montado **a partir daqui**, e não
+  de uma consulta ao Postgres.
+- **`simulador/LayoutDeRetorno`** — como o parceiro escreve o retorno, incluindo
+  o trailer que **não** bate com o conteúdo. Um formatador que sempre conta
+  certo não teria como produzir o arquivo truncado.
+- **`simulador/DiscoDoParceiro`** — o diretório visto por ele. Conexão SSH
+  própria, e não `CanalArquivosSftp`: aquele objeto é o nosso lado do fio.
+- **`simulador/http`** — seis rotas (`/parceiro/*` e `/falha/*`) e dois records
+  de efeito, mais a `FiacaoDoParceiro`, no próprio pacote — a seta aponta do
+  ambiente para o sistema, nunca ao contrário.
+- **`infra/falha/FalhasArmadas`** e os decoradores **`MorreAoMarcarPublicado`**
+  (porta do outbox) e **`MorreAoRegistrarEnvio`** (porta do ciclo). Armados na
+  fiação do servidor; enquanto nada está armado, apenas delegam.
+- **`SimuladorProduzRetornoAplicavelTest`** (3) — o retorno produzido pelo
+  parceiro é baixado, validado e aplicado; num arquivo, em vários, e em vários
+  momentos, sempre para o mesmo estado final.
+- **`FalhasProvocadasTest`** (5) — os cinco cenários de falha por HTTP, pelo
+  mesmo caminho que o painel do step-12 vai usar.
+- **`FundacaoTest.simuladorEhOAmbienteNaoOSistema`** — nada em `domain/` ou
+  `infra/` importa o simulador, e o simulador não importa `java.sql`. As duas
+  metades da frase "é o ambiente, não o sistema", asseridas.
+- **`ServidorDeTeste`** (teste) — subir o servidor apontado para os containers
+  virou uma linha. Três classes precisavam dele; o `EndpointsDevolvemEfeitoTest`
+  do step-10 passou a usá-lo, sem mudar uma asserção.
+
+### Decisões
+
+- **O simulador vive fora de `domain` e de `infra`.** Ele é o ambiente. Dentro
+  de `infra/`, a primeira leitura do projeto passaria a incluir código que não
+  vai para produção, e a fronteira `api → domain ← infra` ganharia um quarto
+  vértice mal explicado.
+- **O simulador só enxerga arquivos.** Consultar o Postgres para montar o
+  retorno seria mais simples e destruiria o valor da demonstração: o retorno
+  viraria função do nosso estado, e o dia em que a remessa saísse errada o
+  parceiro responderia certo assim mesmo.
+- **`DiscoDoParceiro` duplica a conexão SSH de propósito.** Reaproveitar
+  `CanalArquivosSftp` obrigaria a porta do domínio a receber um diretório de
+  destino para servir ao simulador — e a primeira pergunta de quem lesse
+  `CanalArquivos` passaria a ser por que ela sabe escrever em `/retorno`.
+- **As falhas são decoradores, não `if` no use case.** Um `if (simularCrash)`
+  dentro de `PublicarOutboxUseCase` colocaria no código de produção uma linha
+  que só existe para a demonstração — e o código de produção é justamente o que
+  se quer olhar. Custo: dois arquivos e três linhas de fiação.
+- **Armar e disparar são chamadas separadas**, e a falha se desarma ao disparar.
+  Um endpoint que provocasse a falha e executasse o passo esconderia o estado
+  intermediário, que é o único momento em que a janela existe; e uma falha que
+  ficasse armada transformaria a reexecução — a parte que converge — em mais uma
+  falha.
+- **`atrasar` entrega parte do retorno agora e o resto na chamada seguinte**, em
+  vez de simular quiescência. O step-11.md previa que este botão mostrasse "o
+  arquivo em escrita não é baixado", e isso exigiria um parceiro escrevendo por
+  temporizador: a demonstração passaria a depender de qual das duas coisas
+  chegou primeiro. A quiescência continua provada por
+  `ArquivoEmEscritaNaoEhBaixadoTest`, onde o crescimento acontece exatamente
+  entre as duas leituras; o botão mostra o outro lado da mesma ausência — o que
+  o parceiro ainda não disse continua `ENVIADO_PARCEIRO`, e é o fechamento que
+  decidiria sobre ele.
+- **`reenviar-retorno` reescreve os mesmos bytes, e o `sha256` os
+  curto-circuita.** O step-11.md previa aqui o `UPDATE` condicional afetando
+  zero linhas, mas com bytes idênticos o atalho do step-09 age antes — dizer o
+  contrário seria descrever um mecanismo que não roda. `FalhasProvocadasTest`
+  cobre as duas metades: o reenvio idêntico (`REPETIDO`, nada interpretado) e o
+  mesmo retorno **reagrupado** em três arquivos, que tem outro hash, passa
+  direto pelo atalho e chega ao `UPDATE` — que afeta zero linhas.
+- **Nenhum endpoint do ciclo ganhou parâmetro de simulação.** Os oito passos de
+  `api/http` estão como o step-10 os deixou; provocar falha é mexer no ambiente,
+  e mora ao lado do simulador.
+
+### Verificado
+
+- `mvn test` → 80 testes, 0 falhas (71 dos steps anteriores, 9 deste).
+- Os oito botões produzem o efeito que anunciam, asseridos por HTTP contra os
+  containers — banco, fila, bucket e diretório do parceiro.
+- `FundacaoTest.dominioIsolado` e `ControllerNaoDecideTest` continuam verdes: o
+  simulador não vazou para o domínio nem para os controllers do ciclo.
+- `CenarioPontaAPontaTest` continua verde sem uma linha alterada no `Main` — os
+  decoradores de falha só existem na fiação do servidor.
+
+AI: est 3h / actual 55min / ~100% generated / 2 issues caught in review
+
+<!--
+As 2 são divergências entre o step-11.md e o que o código do step-09 já fazia,
+e as duas viraram decisão registrada acima em vez de código que finge:
+
+(1) `atrasar` não tem como mostrar quiescência sem temporizador — duas chamadas
+separadas nunca produzem um arquivo que cresce **entre** as duas leituras de
+atributos.
+
+(2) `reenviar-retorno` byte-idêntico é interceptado pelo `sha256` do step-09
+antes de chegar ao `UPDATE` condicional. Forçar o caminho do `UPDATE` para um
+reenvio idêntico exigiria enfraquecer o atalho — trocar uma otimização correta
+por uma demonstração bonita.
+
+O `ParceiroSimulado` guarda as partes pendentes por ciclo em memória. É estado
+do ambiente, não do sistema: reiniciar o servidor esquece o que o parceiro ainda
+ia entregar, e a chamada seguinte recalcula tudo a partir da remessa.
+-->
+
 ## [step-10] — 2026-08-31 — API de operação do ciclo
 
 O mecanismo deixa de ser deduzido de uma suíte verde e passa a ser **disparável

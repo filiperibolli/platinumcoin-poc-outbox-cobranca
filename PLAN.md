@@ -76,7 +76,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   do job que o EventBridge dispararia. Zero regra no controller.
   Testes: `EndpointsDevolvemEfeitoTest`, `ControllerNaoDecideTest`.
 
-- [ ] **step-11 — Simulador do parceiro e provocação de falhas** · [docs/steps/step-11.md](docs/steps/step-11.md)
+- [x] **step-11 — Simulador do parceiro e provocação de falhas** · [docs/steps/step-11.md](docs/steps/step-11.md)
   Pacote `simulador/`, fora de `domain` e `infra`: é o ambiente, não o sistema.
   Processa a remessa lida do SFTP e escreve o retorno — particionado, atrasado,
   truncado, reenviado ou nenhum. Mais os dois crashes provocáveis por `POST`.
@@ -169,11 +169,14 @@ infra/persistence/  TransacaoJdbc, RepositorioFaturaPostgres,
                     Payload (05) — o corpo do lançamento, gravado e publicado
                     ArmazenamentoArtefatoS3 (07), RepositorioArquivoRetornoPostgres (09)
 infra/canal/        CanalArquivosSftp (08)
-infra/falha/        decoradores das falhas provocáveis (11)
+infra/falha/        FalhasArmadas, MorreAoMarcarPublicado,
+                    MorreAoRegistrarEnvio (11) — as duas janelas, por botão
 infra/config/       Ambiente (05) — DataSource + SqsClient + S3Client + SFTP
                     Fiacao (10) — os mesmos objetos do Main, para o Spring
 infra/consulta/     EstadoDoMundo (10) — o retrato das cinco fontes
-simulador/          ParceiroSimulado e seus endpoints (11) — o ambiente, não o sistema
+simulador/          ParceiroSimulado, RemessaLida, LayoutDeRetorno,
+                    DiscoDoParceiro, FiacaoDoParceiro e simulador/http (11)
+                    — o ambiente, não o sistema
 resources/static/   index.html — o painel (12)
 Main                (06) — o cenário de console, que continua existindo
 AplicacaoHttp       (10) — o servidor
@@ -184,7 +187,7 @@ cinco use cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o
 `TransacaoJdbc`, os quatro repositórios, o `Payload`, o
 `PublicadorLancamentoSqs` e o `Main`, que amarra as peças num cenário só.
 
-O que está marcado com (11) e (12) é plano, não código. A régua para julgá-lo é
+O que está marcado com (12) é plano, não código. A régua para julgá-lo é
 a mesma: cada arquivo com uma responsabilidade que dá para nomear sem usar "e".
 Se um step apertar, corta-se **escopo** — regra de negócio, canal, formato —
 nunca os testes de falha.

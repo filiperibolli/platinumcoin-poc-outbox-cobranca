@@ -121,6 +121,52 @@ class FundacaoTest extends AmbienteDeTeste {
     }
 
     @Test
+    @DisplayName("o simulador é o ambiente: o sistema não o importa, e ele não fala com o banco")
+    void simuladorEhOAmbienteNaoOSistema() throws IOException {
+        Path dominio = fonte("domain");
+        Path infra = fonte("infra");
+        Path simulador = fonte("simulador");
+
+        List<String> conhecemOAmbiente = new ArrayList<>(
+                importesQueCasam(dominio, "com.platinumcoin.outbox.simulador"));
+        conhecemOAmbiente.addAll(importesQueCasam(infra, "com.platinumcoin.outbox.simulador"));
+
+        assertEquals(List.of(), conhecemOAmbiente,
+                "o simulador é o ambiente, não o sistema: a seta aponta dele para cá."
+                        + " Uma linha do parceiro dentro de domain/ ou infra/ colocaria na"
+                        + " primeira leitura do projeto código que não vai para produção");
+
+        assertEquals(List.of(), importesQueCasam(simulador, "java.sql.", "javax.sql."),
+                "o retorno é montado a partir da remessa que atravessou o SFTP."
+                        + " Consultar o Postgres seria mais simples e destruiria a"
+                        + " demonstração: o retorno viraria função do nosso estado");
+    }
+
+    private static Path fonte(String pacote) {
+        return Path.of("src", "main", "java", "com", "platinumcoin", "outbox", pacote);
+    }
+
+    private static List<String> importesQueCasam(Path raiz, String... proibidos)
+            throws IOException {
+        List<String> encontrados = new ArrayList<>();
+        try (Stream<Path> arquivos = Files.walk(raiz)) {
+            for (Path arquivo : arquivos.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {
+                for (String linha : Files.readAllLines(arquivo)) {
+                    if (!linha.startsWith("import ")) {
+                        continue;
+                    }
+                    for (String proibido : proibidos) {
+                        if (linha.contains(proibido)) {
+                            encontrados.add(arquivo.getFileName() + ": " + linha.trim());
+                        }
+                    }
+                }
+            }
+        }
+        return encontrados;
+    }
+
+    @Test
     @DisplayName("o domínio não conhece Spring, AWS SDK nem biblioteca SSH")
     void dominioIsolado() throws IOException {
         Path dominio = Path.of("src", "main", "java", "com", "platinumcoin", "outbox", "domain");
