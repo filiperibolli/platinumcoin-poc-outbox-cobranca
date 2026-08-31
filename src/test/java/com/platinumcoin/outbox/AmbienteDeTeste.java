@@ -1,16 +1,14 @@
 package com.platinumcoin.outbox;
 
+import com.platinumcoin.outbox.infra.config.Ambiente;
 import org.junit.jupiter.api.BeforeAll;
-import org.postgresql.ds.PGSimpleDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.Message;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -20,6 +18,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Base dos testes: sobe Postgres e LocalStack e aplica os MESMOS scripts de
@@ -55,8 +56,7 @@ public abstract class AmbienteDeTeste {
                     // criada pelo script, o teste nem começa.
                     .waitingFor(Wait.forLogMessage(".*fila " + NOME_DA_FILA + " criada.*\\n", 1));
 
-    private static SqsClient sqs;
-    private static DataSource dados;
+    private static Ambiente ambiente;
 
     @BeforeAll
     static void subirAmbiente() throws Exception {
@@ -82,34 +82,76 @@ public abstract class AmbienteDeTeste {
     }
 
     /**
+     * A MESMA montagem que o {@code Main} usa, apontada para os containers.
+     *
+     * <p>Pela razão dos scripts de init: uma fiação de teste escrita à parte
+     * diverge da de produção sem que nada acuse.
+     */
+    private static Ambiente ambiente() {
+        if (ambiente == null) {
+            ambiente = Ambiente.de(Map.of(
+                    "DB_URL", POSTGRES.getJdbcUrl(),
+                    "DB_USUARIO", POSTGRES.getUsername(),
+                    "DB_SENHA", POSTGRES.getPassword(),
+                    "SQS_ENDPOINT", LOCALSTACK.getEndpoint().toString(),
+                    "AWS_REGIAO", LOCALSTACK.getRegion(),
+                    "AWS_CHAVE", LOCALSTACK.getAccessKey(),
+                    "AWS_SEGREDO", LOCALSTACK.getSecretKey(),
+                    "FILA", NOME_DA_FILA)::get);
+        }
+        return ambiente;
+    }
+
+    /**
      * O {@link DataSource} que a infra recebe — o mesmo tipo que o {@code Main}
      * usará, e não uma conexão de teste passada à mão.
      */
     protected static DataSource dados() {
-        if (dados == null) {
-            PGSimpleDataSource fonte = new PGSimpleDataSource();
-            fonte.setUrl(POSTGRES.getJdbcUrl());
-            fonte.setUser(POSTGRES.getUsername());
-            fonte.setPassword(POSTGRES.getPassword());
-            dados = fonte;
-        }
-        return dados;
+        return ambiente().dados();
     }
 
     protected static SqsClient sqs() {
-        if (sqs == null) {
-            sqs = SqsClient.builder()
-                    .endpointOverride(LOCALSTACK.getEndpoint())
-                    .region(Region.of(LOCALSTACK.getRegion()))
-                    .credentialsProvider(StaticCredentialsProvider.create(
-                            AwsBasicCredentials.create(LOCALSTACK.getAccessKey(), LOCALSTACK.getSecretKey())))
-                    .build();
-        }
-        return sqs;
+        return ambiente().sqs();
     }
 
     protected static String urlDaFila() {
-        return sqs().getQueueUrl(b -> b.queueName(NOME_DA_FILA)).queueUrl();
+        return ambiente().urlDaFila();
+    }
+
+    /**
+     * Tira da fila o que estiver lá, esperando por {@code esperadas} mensagens
+     * antes de desistir.
+     *
+     * <p>Consumir é o que torna a asserção honesta: o teste afirma o que o
+     * mainframe receberia, e não o que o LocalStack tem guardado de um teste
+     * anterior. Pedir mais do que se espera é de propósito — {@code
+     * drenarFila(0)} é como se assere que <b>nada</b> foi publicado.
+     */
+    protected static List<Message> drenarFila(int esperadas) {
+        List<Message> recebidas = new ArrayList<>();
+        int passadasVazias = 0;
+        // Só para depois de uma passada vazia: "nenhuma mensagem além destas" é
+        // uma afirmação que precisa de uma leitura a mais para valer. Três
+        // vazias seguidas é desistência — a mensagem esperada não vem, e o
+        // assert de quantidade é quem conta a história.
+        while (passadasVazias < 1 || recebidas.size() < esperadas) {
+            List<Message> lote = sqs().receiveMessage(pedido -> pedido
+                    .queueUrl(urlDaFila())
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(1)
+                    .messageAttributeNames("All")).messages();
+            if (lote.isEmpty()) {
+                if (++passadasVazias > 2) {
+                    break;
+                }
+                continue;
+            }
+            lote.forEach(mensagem -> sqs().deleteMessage(exclusao -> exclusao
+                    .queueUrl(urlDaFila())
+                    .receiptHandle(mensagem.receiptHandle())));
+            recebidas.addAll(lote);
+        }
+        return List.copyOf(recebidas);
     }
 
     /** Zera o estado entre testes sem derrubar os containers. */
