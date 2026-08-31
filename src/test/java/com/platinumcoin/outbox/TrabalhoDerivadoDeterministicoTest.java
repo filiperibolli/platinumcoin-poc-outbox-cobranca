@@ -4,6 +4,7 @@ import com.platinumcoin.outbox.domain.model.Remessa;
 import com.platinumcoin.outbox.domain.usecase.GerarRemessaUseCase;
 import com.platinumcoin.outbox.domain.usecase.MontarCicloUseCase;
 import com.platinumcoin.outbox.infra.persistence.RepositorioCicloPostgres;
+import com.platinumcoin.outbox.infra.persistence.RepositorioFaturaPostgres;
 import com.platinumcoin.outbox.infra.persistence.RepositorioTentativaPostgres;
 import com.platinumcoin.outbox.infra.persistence.TransacaoJdbc;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * arquivo discordam e ninguém sabe qual o parceiro processou. A comparação é
  * das Strings inteiras, e não de tamanho ou hash — é o arquivo que precisa ser
  * o mesmo, não um resumo dele.
+ *
+ * <p>Aqui a asserção é sobre a <b>projeção</b>: o que o ciclo produz, com a
+ * ordem vindo do repositório. O que a gravação faz com ela — chave
+ * determinística, sobrescrita idêntica, órfão inofensivo — é o step-07, em
+ * {@code RemessaDeterministicaTest} e {@code RemessaSobreviveAReexecucaoTest}.
  */
 class TrabalhoDerivadoDeterministicoTest extends AmbienteDeTeste {
 
@@ -34,6 +40,7 @@ class TrabalhoDerivadoDeterministicoTest extends AmbienteDeTeste {
         limparTabelas();
         RepositorioCicloPostgres ciclos = new RepositorioCicloPostgres(dados());
         RepositorioTentativaPostgres tentativas = new RepositorioTentativaPostgres(dados());
+        RepositorioFaturaPostgres faturas = new RepositorioFaturaPostgres(dados());
 
         // Inseridas fora de ordem de propósito: a remessa não pode depender de
         // quem chegou primeiro na tabela.
@@ -43,7 +50,8 @@ class TrabalhoDerivadoDeterministicoTest extends AmbienteDeTeste {
         new MontarCicloUseCase(new TransacaoJdbc.Fabrica(dados()), ciclos)
                 .executar("CICLO-1", BANCO, DATA);
 
-        gerar = new GerarRemessaUseCase(ciclos, tentativas);
+        gerar = new GerarRemessaUseCase(
+                new TransacaoJdbc.Fabrica(dados()), ciclos, tentativas, faturas, artefatos());
     }
 
     @Test
@@ -57,14 +65,18 @@ class TrabalhoDerivadoDeterministicoTest extends AmbienteDeTeste {
     }
 
     @Test
-    @DisplayName("a remessa sai ordenada por id, no formato posicional de três campos")
+    @DisplayName("a remessa sai ordenada por id, entre o header e o trailer")
     void formatoPosicionalOrdenadoPorId() {
         Remessa remessa = gerar.executar("CICLO-1");
 
+        // O \s no fim da primeira linha é um espaço: text block corta espaço
+        // final, e o preenchimento do cicloId faz parte do arquivo.
         assertEquals("""
-                FAT-A-T1            FAT-A               001
-                FAT-B-T1            FAT-B               001
-                FAT-C-T1            FAT-C               001
+                034120260830CICLO-1        \s
+                1FAT-A-T1        FAT-A           000000000010000
+                1FAT-B-T1        FAT-B           000000000010000
+                1FAT-C-T1        FAT-C           000000000010000
+                9000003
                 """, remessa.conteudo());
     }
 }

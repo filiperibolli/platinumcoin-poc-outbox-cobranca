@@ -1,12 +1,15 @@
 package com.platinumcoin.outbox;
 
+import com.platinumcoin.outbox.domain.port.ArmazenamentoArtefato;
 import com.platinumcoin.outbox.infra.config.Ambiente;
+import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
 import org.junit.jupiter.api.BeforeAll;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.MountableFile;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
 
@@ -23,8 +26,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Base dos testes: sobe Postgres e LocalStack e aplica os MESMOS scripts de
- * init que o {@code docker compose} usa.
+ * Base dos testes: sobe Postgres e LocalStack (SQS e S3) e aplica os MESMOS
+ * scripts de init que o {@code docker compose} usa.
  *
  * <p>Reaproveitar os scripts não é economia de digitação — é o que garante que
  * um teste verde signifique alguma coisa. Um schema de teste escrito à parte
@@ -36,6 +39,7 @@ import java.util.Map;
 public abstract class AmbienteDeTeste {
 
     protected static final String NOME_DA_FILA = "lancamentos-contabeis";
+    protected static final String NOME_DO_BUCKET = "cobranca-artefatos";
 
     private static final Path SCHEMA_SQL = Path.of("infra", "init", "02-postgres.sql");
     private static final Path INIT_LOCALSTACK = Path.of("infra", "init", "01-localstack.sh");
@@ -48,13 +52,14 @@ public abstract class AmbienteDeTeste {
 
     protected static final LocalStackContainer LOCALSTACK =
             new LocalStackContainer(DockerImageName.parse("localstack/localstack:3.8"))
-                    .withServices(LocalStackContainer.Service.SQS)
+                    .withServices(LocalStackContainer.Service.SQS, LocalStackContainer.Service.S3)
                     .withCopyFileToContainer(
                             MountableFile.forHostPath(INIT_LOCALSTACK, 0755),
                             "/etc/localstack/init/ready.d/01-localstack.sh")
-                    // Espera o log do PRÓPRIO script de init: se a fila não foi
-                    // criada pelo script, o teste nem começa.
-                    .waitingFor(Wait.forLogMessage(".*fila " + NOME_DA_FILA + " criada.*\\n", 1));
+                    // Espera o log do PRÓPRIO script de init, na ÚLTIMA linha
+                    // dele: se a fila e o bucket não foram criados pelo script,
+                    // o teste nem começa.
+                    .waitingFor(Wait.forLogMessage(".*bucket " + NOME_DO_BUCKET + " criado.*\\n", 1));
 
     private static Ambiente ambiente;
 
@@ -96,10 +101,12 @@ public abstract class AmbienteDeTeste {
                     "DB_USUARIO", POSTGRES.getUsername(),
                     "DB_SENHA", POSTGRES.getPassword(),
                     "SQS_ENDPOINT", LOCALSTACK.getEndpoint().toString(),
+                    "S3_ENDPOINT", LOCALSTACK.getEndpoint().toString(),
                     "AWS_REGIAO", LOCALSTACK.getRegion(),
                     "AWS_CHAVE", LOCALSTACK.getAccessKey(),
                     "AWS_SEGREDO", LOCALSTACK.getSecretKey(),
-                    "FILA", NOME_DA_FILA)::get);
+                    "FILA", NOME_DA_FILA,
+                    "BUCKET", NOME_DO_BUCKET)::get);
         }
         return ambiente;
     }
@@ -114,6 +121,15 @@ public abstract class AmbienteDeTeste {
 
     protected static SqsClient sqs() {
         return ambiente().sqs();
+    }
+
+    protected static S3Client s3() {
+        return ambiente().s3();
+    }
+
+    /** O armazenamento que a infra recebe — o mesmo que o {@code Main} usa. */
+    protected static ArmazenamentoArtefato artefatos() {
+        return new ArmazenamentoArtefatoS3(s3(), ambiente().bucket());
     }
 
     protected static String urlDaFila() {

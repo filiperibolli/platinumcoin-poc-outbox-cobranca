@@ -3,6 +3,98 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-07] — 2026-08-31 — Remessa durável no S3
+
+Gerar e transmitir deixam de ser o mesmo instante. A remessa passa a existir
+como objeto no S3, com chave derivada do ciclo, e o `put` acontece **antes** do
+`COMMIT` que registra a chave — a mesma ordem do relay, e o step existe para
+mostrar por que aqui ela não custa nada: o objeto é endereçável, e a segunda
+gravação sobrescreve com os mesmos bytes. A comparação entre os três efeitos
+externos do projeto (S3, parceiro, fila) é a lição, e agora ela está em teste.
+
+### Adicionado
+
+- **`ArmazenamentoArtefato`** — `put`, `get`, `existe`. Sem `delete` e sem
+  `list`: expurgo é operação de infra, e uma porta que o oferecesse convidaria
+  regra de negócio a decidir o que apagar.
+- **`ChaveArtefato`** — a chave como valor do domínio:
+  `remessa/{banco}/{dataRef}/{cicloId}.rem`, montada num lugar só. Data em
+  `yyyyMMdd`, o mesmo formato do header — o projeto escreve data de uma maneira
+  só, no arquivo e no endereço dele.
+- **`ArmazenamentoArtefatoS3`** — AWS SDK v2 com `forcePathStyle`, o que o
+  LocalStack exige. Traduz `SdkException` em `FalhaDePersistencia` antes de
+  atravessar a porta, como o publicador do SQS já fazia.
+- **Layout posicional em `Remessa`** — header (`0`), N detalhes (`1`) e trailer
+  (`9`) com a contagem. `idTentativa` nas posições 2–17 é a correlation key do
+  step-09; valor em centavos, sem separador.
+- **`Remessa.sha256()` e `quantidadeDeDetalhes()`** — o hash saiu do `Main`, que
+  o calculava para imprimir, e virou propriedade do artefato.
+- **`ciclo_cobranca.remessa_chave` e `remessa_sha256`** — nulos até a geração
+  commitar, e sempre juntos, por `CHECK` e pelo construtor do record.
+- **`RepositorioFatura.doCiclo`** — uma consulta por ciclo, e não uma por
+  tentativa dentro do laço: a remessa leva o valor, e o valor é da fatura.
+- **Bucket `cobranca-artefatos` no script de init**, com `SERVICES: sqs,s3`. O
+  script ganhou uma linha final própria, e é nela que o Testcontainers espera:
+  se o bucket não foi criado, o teste nem começa.
+- **`RemessaDeterministicaTest`** (5 testes) e **`RemessaSobreviveAReexecucaoTest`**
+  (1 teste) — os dois obrigatórios do step, com a comparação sempre em bytes
+  inteiros.
+- **Dois testes novos em `FundacaoTest`** — o bucket existe sem passo manual, e
+  a constraint que amarra chave e hash existe no banco.
+
+### Decisões
+
+- **A chave é derivada do ciclo, não sorteada.** É o que transforma o `put`
+  reexecutado em sobrescrita idêntica. Um UUID ou um `now()` na chave faria de
+  cada tentativa um objeto novo, e o bucket viraria um log de tentativas em vez
+  do artefato do ciclo — ver ADR-0003.
+- **`registrarRemessa` não tem guarda de status**, ao contrário dos `UPDATE` que
+  decidem estado de tentativa e de fatura. De propósito: a segunda geração grava
+  exatamente os mesmos dois valores. Guardar contra a reexecução seria proteger
+  contra o caso que o step existe para mostrar como inofensivo.
+- **Chave e hash moram no `CicloCobranca`, não numa tabela de artefatos.** São
+  estado do ciclo — "a remessa deste ciclo é aquele objeto" —, e uma tabela à
+  parte só acrescentaria um join para responder a mesma pergunta.
+- **O sha256 é asserção sobre o nosso código, não integridade do S3.** Regerar e
+  comparar com o que está no banco responde "o artefato mudou?" sem baixar nada.
+  O teste confere o hash gravado contra o objeto de fato lido, calculando o
+  digest por fora — não contra o que a projeção diz ter produzido.
+- **`existe` propaga falha de rede em vez de responder `false`.** "Não deu para
+  perguntar" não é "não existe": engolir isso faria uma indisponibilidade do S3
+  parecer um artefato que sumiu.
+- **`TrabalhoDerivadoDeterministicoTest` (step-02) continua existindo.** Ele
+  assere a **projeção** — bytes iguais, ordem vinda do repositório; os dois
+  testes novos asseram a **gravação**. Fundi-los teria custado a distinção entre
+  "a função é pura" e "o artefato é endereçável", que é o assunto inteiro do
+  step.
+- **O `Main` gera a remessa duas vezes e imprime as duas linhas.** É a segunda
+  passada que torna visível a sobrescrita idêntica — o contraste com a segunda
+  passada do relay, que custa uma duplicata.
+
+### Verificado
+
+- `mvn test` → 48 testes, 0 falhas (40 dos steps anteriores, 8 deste).
+- `docker compose up -d` + `mvn compile exec:java` → o cenário roda contra o
+  Compose e imprime
+  `[artefato] remessa/341/20260831/C-1.rem — 282 bytes no S3 (regerada: idêntica, objeto: idêntico)`.
+  O objeto lido do bucket com `awslocal s3 cp` tem as 7 linhas esperadas —
+  header, 5 detalhes, trailer `9000005` — e o ciclo no Postgres traz a chave e o
+  hash.
+- **Teste de mutação manual**, três vezes. (1) Chave com `nanoTime`: 3 testes
+  caem, inclusive o do crash — o órfão deixa de estar onde a reexecução grava.
+  (2) `COMMIT` antes do `put`: `RemessaSobreviveAReexecucaoTest` cai, porque a
+  janela que o teste descreve deixa de existir. (3) Trailer contando um a mais:
+  caem o teste de layout e o de contagem.
+
+AI: est 2h / actual 55min / ~95% generated / 1 issue caught in review
+
+<!--
+O 1: o decorador de `RepositorioCiclo` em `MontagemDeterministicaTest` (step-02)
+parou de compilar com o método novo da porta — sinal de que uma porta que cresce
+cobra de todo mundo que a implementa, inclusive dos testes. Delegar era a
+resposta certa ali: aquele teste mata a atribuição, não a remessa.
+-->
+
 ## [step-06] — 2026-08-31 — Cenário ponta a ponta
 
 O último step não acrescenta regra: torna visível, sem ler teste nenhum, o que

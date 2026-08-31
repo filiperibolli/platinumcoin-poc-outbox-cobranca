@@ -8,6 +8,7 @@ import com.platinumcoin.outbox.domain.model.LancamentoContabil;
 import com.platinumcoin.outbox.domain.model.RegistroOutbox;
 import com.platinumcoin.outbox.domain.model.Remessa;
 import com.platinumcoin.outbox.domain.model.TentativaDebito;
+import com.platinumcoin.outbox.domain.port.ArmazenamentoArtefato;
 import com.platinumcoin.outbox.domain.port.PublicadorLancamento;
 import com.platinumcoin.outbox.domain.port.RepositorioCiclo;
 import com.platinumcoin.outbox.domain.port.RepositorioFatura;
@@ -20,6 +21,7 @@ import com.platinumcoin.outbox.domain.usecase.GerarRemessaUseCase;
 import com.platinumcoin.outbox.domain.usecase.MontarCicloUseCase;
 import com.platinumcoin.outbox.domain.usecase.PublicarOutboxUseCase;
 import com.platinumcoin.outbox.infra.config.Ambiente;
+import com.platinumcoin.outbox.infra.persistence.ArmazenamentoArtefatoS3;
 import com.platinumcoin.outbox.infra.persistence.PublicadorLancamentoSqs;
 import com.platinumcoin.outbox.infra.persistence.RepositorioCicloPostgres;
 import com.platinumcoin.outbox.infra.persistence.RepositorioFaturaPostgres;
@@ -32,9 +34,6 @@ import software.amazon.awssdk.services.sqs.model.Message;
 import javax.sql.DataSource;
 import java.io.PrintStream;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -43,7 +42,6 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -95,6 +93,7 @@ public final class Main {
     private final RepositorioCiclo ciclos;
     private final RepositorioOutbox outbox;
     private final PublicadorLancamento publicador;
+    private final ArmazenamentoArtefato artefatos;
 
     private final MontarCicloUseCase montar;
     private final GerarRemessaUseCase gerarRemessa;
@@ -120,10 +119,12 @@ public final class Main {
         this.ciclos = new RepositorioCicloPostgres(dados);
         this.outbox = new RepositorioOutboxPostgres(dados);
         this.publicador = new PublicadorLancamentoSqs(sqs, urlDaFila);
+        this.artefatos = new ArmazenamentoArtefatoS3(ambiente.s3(), ambiente.bucket());
 
         Transacao.Fabrica transacoes = new TransacaoJdbc.Fabrica(dados);
         this.montar = new MontarCicloUseCase(transacoes, ciclos);
-        this.gerarRemessa = new GerarRemessaUseCase(ciclos, tentativas);
+        this.gerarRemessa = new GerarRemessaUseCase(
+                transacoes, ciclos, tentativas, faturas, artefatos);
         this.aplicarRetorno = new AplicarRetornoUseCase(transacoes, tentativas, faturas, outbox);
         this.fecharCiclo = new FecharCicloUseCase(transacoes, ciclos);
     }
@@ -169,15 +170,24 @@ public final class Main {
                 montado.ciclo().id(), montado.ciclo().status(), montado.tentativas(), BANCO, DATA));
     }
 
+    /**
+     * Gera a remessa duas vezes de propósito: a segunda passada é o que torna
+     * visível que o artefato é endereçável — mesma chave, mesmos bytes, uma
+     * sobrescrita que ninguém paga. É a diferença entre este efeito externo e o
+     * da fila, onde a segunda passada custa uma duplicata.
+     */
     private void projetarARemessa() {
         Remessa remessa = gerarRemessa.executar(CICLO);
         Remessa regerada = gerarRemessa.executar(CICLO);
+        byte[] noArmazenamento = artefatos.get(remessa.chave());
 
-        linha("remessa", "%s %d linhas, sha256=%s (regerada: %s)".formatted(
-                remessa.cicloId(),
-                remessa.conteudo().lines().count(),
-                sha256(remessa.conteudo()),
-                remessa.equals(regerada) ? "idêntica" : "DIVERGIU"));
+        linha("remessa", "%s %d detalhes, sha256=%s".formatted(
+                remessa.cicloId(), remessa.quantidadeDeDetalhes(), remessa.sha256()));
+        linha("artefato", "%s — %d bytes no S3 (regerada: %s, objeto: %s)".formatted(
+                remessa.chave(),
+                noArmazenamento.length,
+                remessa.equals(regerada) ? "idêntica" : "DIVERGIU",
+                Arrays.equals(noArmazenamento, remessa.bytes()) ? "idêntico" : "DIVERGIU"));
     }
 
     /**
@@ -403,16 +413,6 @@ public final class Main {
             return stmt.executeUpdate();
         } catch (SQLException e) {
             throw new FalhaDePersistencia("falha ao executar: " + sql, e);
-        }
-    }
-
-    private static String sha256(String conteudo) {
-        try {
-            byte[] resumo = MessageDigest.getInstance("SHA-256")
-                    .digest(conteudo.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(resumo).substring(0, 16);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("JRE sem SHA-256", e);
         }
     }
 

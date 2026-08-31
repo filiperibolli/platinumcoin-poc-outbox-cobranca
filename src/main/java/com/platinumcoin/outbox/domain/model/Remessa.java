@@ -1,13 +1,21 @@
 package com.platinumcoin.outbox.domain.model;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * O arquivo transmitido ao banco parceiro: uma linha posicional por tentativa
- * do ciclo.
+ * O arquivo transmitido ao banco parceiro: header, uma linha por tentativa do
+ * ciclo, trailer com a contagem.
  *
  * <p>É <b>trabalho derivado</b>. O ciclo é o sistema de registro; a remessa é
  * uma projeção dele, e {@link #de} é uma função pura — mesmo ciclo, mesmas
@@ -16,15 +24,38 @@ import java.util.stream.Collectors;
  * vira um segundo sistema de registro, e aí duas cópias do mesmo arquivo
  * passam a discordar sem que ninguém saiba qual vale.
  *
- * <p>O formato é posicional e trivial — três campos, sem cabeçalho nem
- * trailer. CNAB 240 de verdade é I/O e formato, não desenho: a única
- * propriedade do formato que este projeto usa como argumento é ser
- * determinístico — ver README, "fora de escopo".
+ * <p>O layout mora aqui, no domínio, e não na infra que transmite: posição de
+ * campo é regra de contrato com o parceiro. O que é infra é o {@code put}.
+ *
+ * <p><b>Não é CNAB 240.</b> A propriedade do formato que este projeto usa como
+ * argumento é uma só — completude verificável pelo trailer, sem depender de o
+ * transporte avisar que terminou.
+ *
+ * <pre>
+ * tipo   posições                campos
+ *   0    1 / 2–4 / 5–12 / 13–28  header:  banco, dataRef (yyyyMMdd), cicloId
+ *   1    1 / 2–17 / 18–33 / 34–48 detalhe: idTentativa, faturaId, valor em centavos
+ *   9    1 / 2–7                 trailer: quantidade de registros de detalhe
+ * </pre>
+ *
+ * <p>O {@code idTentativa} em posição fixa é a <b>correlation key</b>: é o
+ * campo que volta no retorno e liga a linha do parceiro à tentativa no banco.
  */
-public record Remessa(String cicloId, String conteudo) {
+public record Remessa(String cicloId, ChaveArtefato chave, String conteudo) {
 
-    private static final int LARGURA_ID = 20;
-    private static final int LARGURA_NUMERO = 3;
+    private static final char TIPO_HEADER = '0';
+    private static final char TIPO_DETALHE = '1';
+    private static final char TIPO_TRAILER = '9';
+
+    private static final int LARGURA_BANCO = 3;
+    private static final int LARGURA_CICLO = 16;
+    private static final int LARGURA_TENTATIVA = 16;
+    private static final int LARGURA_FATURA = 16;
+    private static final int LARGURA_VALOR = 15;
+    private static final int LARGURA_CONTAGEM = 6;
+
+    /** {@code yyyyMMdd} sem separador, como o resto do arquivo: só posição. */
+    private static final DateTimeFormatter DATA = DateTimeFormatter.BASIC_ISO_DATE;
 
     /**
      * Fim de linha fixo, e não {@code System.lineSeparator()}: a remessa gerada
@@ -33,9 +64,18 @@ public record Remessa(String cicloId, String conteudo) {
      */
     private static final String FIM_DE_LINHA = "\n";
 
+    /**
+     * Centavos, inteiro, com zeros à esquerda. Decimal com vírgula faria o
+     * mesmo ciclo gerar bytes diferentes conforme o locale da JVM.
+     */
+    private static final BigDecimal CENTAVOS = BigDecimal.valueOf(100);
+
     public Remessa {
         if (cicloId == null || cicloId.isBlank()) {
             throw new IllegalArgumentException("remessa sem ciclo");
+        }
+        if (chave == null) {
+            throw new IllegalArgumentException("remessa do ciclo " + cicloId + " sem chave");
         }
         if (conteudo == null) {
             throw new IllegalArgumentException("remessa do ciclo " + cicloId + " sem conteúdo");
@@ -43,23 +83,58 @@ public record Remessa(String cicloId, String conteudo) {
     }
 
     /**
-     * Projeta o ciclo e suas tentativas no arquivo. Não lê relógio, nem sorteio,
-     * nem nada além dos argumentos.
+     * Projeta o ciclo, suas tentativas e as faturas correspondentes no arquivo.
+     * Não lê relógio, nem sorteio, nem nada além dos argumentos.
      *
      * <p>A ordenação por id acontece aqui, e não só no {@code ORDER BY} da
      * consulta: assim a igualdade byte a byte é propriedade da projeção, não de
      * quem a alimenta.
      */
-    public static Remessa de(CicloCobranca ciclo, List<TentativaDebito> tentativas) {
+    public static Remessa de(CicloCobranca ciclo, List<TentativaDebito> tentativas,
+                             List<Fatura> faturas) {
         if (ciclo == null) {
             throw new IllegalArgumentException("remessa sem ciclo");
         }
-        tentativas.forEach(tentativa -> exigirDoCiclo(ciclo, tentativa));
-        String conteudo = tentativas.stream()
+        Map<String, Fatura> porId = new HashMap<>();
+        faturas.forEach(fatura -> porId.put(fatura.id(), fatura));
+
+        List<TentativaDebito> emOrdem = tentativas.stream()
                 .sorted(Comparator.comparing(TentativaDebito::id))
-                .map(Remessa::linha)
-                .collect(Collectors.joining());
-        return new Remessa(ciclo.id(), conteudo);
+                .toList();
+        emOrdem.forEach(tentativa -> exigirDoCiclo(ciclo, tentativa));
+
+        String conteudo = header(ciclo)
+                + emOrdem.stream().map(tentativa -> detalhe(tentativa, valorDe(porId, tentativa)))
+                        .collect(Collectors.joining())
+                + trailer(emOrdem.size());
+
+        return new Remessa(ciclo.id(), ChaveArtefato.daRemessa(ciclo), conteudo);
+    }
+
+    /** O conteúdo como bytes — o que vai para o armazenamento, sem reencode. */
+    public byte[] bytes() {
+        return conteudo.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * O sha256 do conteúdo, em hexadecimal.
+     *
+     * <p>Gravado ao lado da chave no ciclo, é o que torna o determinismo
+     * verificável fora de teste: regerar e comparar o hash responde "o artefato
+     * mudou?" sem baixar nada. Não é controle de integridade do armazenamento —
+     * é asserção sobre o nosso próprio código.
+     */
+    public String sha256() {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes()));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JRE sem SHA-256", e);
+        }
+    }
+
+    /** Quantas linhas de detalhe o trailer promete — a contagem que o parceiro confere. */
+    public int quantidadeDeDetalhes() {
+        return (int) conteudo.lines().filter(linha -> linha.charAt(0) == TIPO_DETALHE).count();
     }
 
     private static void exigirDoCiclo(CicloCobranca ciclo, TentativaDebito tentativa) {
@@ -69,21 +144,59 @@ public record Remessa(String cicloId, String conteudo) {
         }
     }
 
-    private static String linha(TentativaDebito tentativa) {
-        return campo(tentativa.id())
-                + campo(tentativa.faturaId())
-                + String.format(Locale.ROOT, "%0" + LARGURA_NUMERO + "d", tentativa.numero())
+    private static BigDecimal valorDe(Map<String, Fatura> porId, TentativaDebito tentativa) {
+        Fatura fatura = porId.get(tentativa.faturaId());
+        if (fatura == null) {
+            throw new IllegalArgumentException("tentativa " + tentativa.id()
+                    + " sem a fatura " + tentativa.faturaId() + " para projetar o valor");
+        }
+        return fatura.valor();
+    }
+
+    private static String header(CicloCobranca ciclo) {
+        return TIPO_HEADER
+                + alfanumerico(ciclo.banco(), LARGURA_BANCO)
+                + DATA.format(ciclo.dataRef())
+                + alfanumerico(ciclo.id(), LARGURA_CICLO)
                 + FIM_DE_LINHA;
     }
 
+    private static String detalhe(TentativaDebito tentativa, BigDecimal valor) {
+        return TIPO_DETALHE
+                + alfanumerico(tentativa.id(), LARGURA_TENTATIVA)
+                + alfanumerico(tentativa.faturaId(), LARGURA_FATURA)
+                + numerico(centavos(valor), LARGURA_VALOR)
+                + FIM_DE_LINHA;
+    }
+
+    private static String trailer(int detalhes) {
+        return TIPO_TRAILER + numerico(detalhes, LARGURA_CONTAGEM) + FIM_DE_LINHA;
+    }
+
+    private static long centavos(BigDecimal valor) {
+        // longValueExact e não setScale com arredondamento: um valor que não
+        // couber em centavos inteiros é erro de dados, não caso de arredondar.
+        return valor.multiply(CENTAVOS).longValueExact();
+    }
+
     /** Campo alfanumérico à esquerda, preenchido com espaços. */
-    private static String campo(String valor) {
-        if (valor.length() > LARGURA_ID) {
+    private static String alfanumerico(String valor, int largura) {
+        if (valor.length() > largura) {
             throw new IllegalArgumentException(
-                    "campo não cabe em " + LARGURA_ID + " posições: " + valor);
+                    "campo não cabe em " + largura + " posições: " + valor);
         }
         // Locale.ROOT: em locales com dígitos próprios, formatar é uma decisão
         // sobre bytes — e a remessa precisa ser a mesma em qualquer máquina.
-        return String.format(Locale.ROOT, "%-" + LARGURA_ID + "s", valor);
+        return String.format(Locale.ROOT, "%-" + largura + "s", valor);
+    }
+
+    /** Campo numérico à direita, preenchido com zeros. */
+    private static String numerico(long valor, int largura) {
+        String formatado = String.format(Locale.ROOT, "%0" + largura + "d", valor);
+        if (formatado.length() > largura) {
+            throw new IllegalArgumentException(
+                    "número não cabe em " + largura + " posições: " + valor);
+        }
+        return formatado;
     }
 }

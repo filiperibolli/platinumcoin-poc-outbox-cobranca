@@ -4,6 +4,7 @@ import org.postgresql.ds.PGSimpleDataSource;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 import javax.sql.DataSource;
@@ -11,12 +12,14 @@ import java.net.URI;
 import java.util.function.UnaryOperator;
 
 /**
- * Onde o programa descobre com que banco e com que fila ele fala.
+ * Onde o programa descobre com que banco, com que fila e com que bucket ele
+ * fala.
  *
  * <p>É o único lugar que lê configuração. Os repositórios recebem um
- * {@link DataSource} pronto e o publicador recebe um {@link SqsClient} pronto —
- * nenhum deles sabe de variável de ambiente, e é por isso que os testes montam
- * os mesmos objetos apontando para os containers.
+ * {@link DataSource} pronto, o publicador recebe um {@link SqsClient} pronto e
+ * o armazenamento recebe um {@link S3Client} pronto — nenhum deles sabe de
+ * variável de ambiente, e é por isso que os testes montam os mesmos objetos
+ * apontando para os containers.
  *
  * <p>Os padrões são os do {@code infra/docker-compose.yml}: subir o Compose e
  * rodar o {@code Main} sem exportar nada é o caminho normal.
@@ -25,13 +28,18 @@ public final class Ambiente {
 
     private final DataSource dados;
     private final SqsClient sqs;
+    private final S3Client s3;
     private final String nomeDaFila;
+    private final String bucket;
     private String urlDaFila;
 
-    private Ambiente(DataSource dados, SqsClient sqs, String nomeDaFila) {
+    private Ambiente(DataSource dados, SqsClient sqs, S3Client s3,
+                     String nomeDaFila, String bucket) {
         this.dados = dados;
         this.sqs = sqs;
+        this.s3 = s3;
         this.nomeDaFila = nomeDaFila;
+        this.bucket = bucket;
     }
 
     /** O ambiente do processo — o que o {@code Main} usa. */
@@ -59,15 +67,32 @@ public final class Ambiente {
         // Credenciais estáticas porque o destino é o LocalStack, aqui e no
         // Compose. Contra uma conta AWS de verdade, isto viraria a cadeia de
         // credenciais padrão — e é a única linha que mudaria.
+        String regiao = valor(variaveis, "AWS_REGIAO", "us-east-1");
+        StaticCredentialsProvider credenciais = StaticCredentialsProvider.create(
+                AwsBasicCredentials.create(
+                        valor(variaveis, "AWS_CHAVE", "test"),
+                        valor(variaveis, "AWS_SEGREDO", "test")));
+
         SqsClient sqs = SqsClient.builder()
                 .endpointOverride(URI.create(valor(variaveis, "SQS_ENDPOINT", "http://localhost:4566")))
-                .region(Region.of(valor(variaveis, "AWS_REGIAO", "us-east-1")))
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        valor(variaveis, "AWS_CHAVE", "test"),
-                        valor(variaveis, "AWS_SEGREDO", "test"))))
+                .region(Region.of(regiao))
+                .credentialsProvider(credenciais)
                 .build();
 
-        return new Ambiente(fonte, sqs, valor(variaveis, "FILA", "lancamentos-contabeis"));
+        S3Client s3 = S3Client.builder()
+                .endpointOverride(URI.create(valor(variaveis, "S3_ENDPOINT", "http://localhost:4566")))
+                .region(Region.of(regiao))
+                .credentialsProvider(credenciais)
+                // Endereçamento por caminho: o LocalStack não resolve o bucket
+                // como subdomínio, e virtual-hosted-style é o padrão do SDK.
+                // Contra a AWS de verdade esta linha sairia junto com o
+                // endpointOverride.
+                .forcePathStyle(true)
+                .build();
+
+        return new Ambiente(fonte, sqs, s3,
+                valor(variaveis, "FILA", "lancamentos-contabeis"),
+                valor(variaveis, "BUCKET", "cobranca-artefatos"));
     }
 
     public DataSource dados() {
@@ -76,6 +101,15 @@ public final class Ambiente {
 
     public SqsClient sqs() {
         return sqs;
+    }
+
+    public S3Client s3() {
+        return s3;
+    }
+
+    /** O bucket dos artefatos do ciclo: remessas e, no step-09, retornos. */
+    public String bucket() {
+        return bucket;
     }
 
     /**

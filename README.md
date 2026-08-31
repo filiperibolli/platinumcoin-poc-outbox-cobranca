@@ -166,7 +166,7 @@ projeto inteiro.
 # testes — sobem Postgres e LocalStack sozinhos (Testcontainers), sem o Compose
 mvn test
 
-# ambiente local — schema e fila prontos, zero passo manual
+# ambiente local — schema, fila e bucket prontos, zero passo manual
 docker compose -f infra/docker-compose.yml up
 ```
 
@@ -195,7 +195,8 @@ o retorno duplicado que afeta **zero** linhas, o silêncio que vira
 [dados]    F-3 89.90 ABERTA · T-4
 [dados]    F-4 42.00 ABERTA · T-5
 [ciclo]    C-1 MONTADO — 5 tentativas ABERTO → SOLICITADO (banco 341, 2026-08-31)
-[remessa]  C-1 5 linhas, sha256=38d2361560d4ccdf (regerada: idêntica)
+[remessa]  C-1 5 detalhes, sha256=588b15cc7805f50a6fa343f92ebc12edcb3aafd6117820c60197322549643988
+[artefato] remessa/341/20260831/C-1.rem — 282 bytes no S3 (regerada: idêntica, objeto: idêntico)
 [envia]    C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (transporte fora de escopo)
 [retorno]  T-1 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
 [fatura]   F-1 ABERTA → PAGA
@@ -429,8 +430,9 @@ src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
 
 Os pacotes `api/http`, `simulador/` e o painel são os steps 10–12; `infra/canal`
-e o armazenamento no S3 são os steps 07–09. Ver [PLAN.md](PLAN.md) para o que já
-está escrito e o que ainda é plano.
+e a coleta do retorno são os steps 08–09. O armazenamento no S3 já existe — é o
+step-07. Ver [PLAN.md](PLAN.md) para o que já está escrito e o que ainda é
+plano.
 
 Máquina de estados:
 

@@ -27,8 +27,8 @@ services:
     image: localstack/localstack:3.8
     container_name: outbox-localstack
     environment:
-      # Teto de infra do projeto: um único serviço AWS.
-      SERVICES: sqs
+      # Teto de infra do projeto: Postgres + dois serviços AWS.
+      SERVICES: sqs,s3
       DEBUG: "0"
     ports:
       - "4566:4566"
@@ -36,7 +36,7 @@ services:
       # ready.d roda depois que o LocalStack está de pé.
       - ./init/01-localstack.sh:/etc/localstack/init/ready.d/01-localstack.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1 && awslocal s3 ls s3://cobranca-artefatos >/dev/null 2>&1"]
       interval: 3s
       timeout: 5s
       retries: 30

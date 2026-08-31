@@ -2,6 +2,7 @@ package com.platinumcoin.outbox.domain.port;
 
 import com.platinumcoin.outbox.domain.model.Fatura;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -18,6 +19,16 @@ public interface RepositorioFatura {
     void inserir(Fatura fatura);
 
     Optional<Fatura> buscar(String faturaId);
+
+    /**
+     * As faturas das tentativas de um ciclo, em ordem estável de id.
+     *
+     * <p>A remessa leva o valor a debitar, e o valor é da fatura — não da
+     * tentativa. Uma consulta por ciclo, e não uma por tentativa dentro do
+     * laço da projeção: o número de idas ao banco não pode depender do
+     * tamanho do lote.
+     */
+    List<Fatura> doCiclo(String cicloId);
 
     /**
      * Marca a fatura como {@code PAGA}, <b>somente</b> se ela ainda estiver

@@ -35,16 +35,29 @@ final class Cenario {
     /** Uma fatura {@code ABERTA} com uma tentativa {@code ABERTO} no recorte informado. */
     static TentativaDebito tentativaAberta(String faturaId, int numero,
                                            String banco, LocalDate dataRef) {
-        inserirFatura(faturaId);
-        TentativaDebito tentativa = TentativaDebito.aberta(
-                faturaId + "-T" + numero, faturaId, numero, banco, dataRef);
-        new RepositorioTentativaPostgres(AmbienteDeTeste.dados()).inserir(tentativa);
-        return tentativa;
+        return tentativaAberta(faturaId, numero, banco, dataRef, VALOR);
     }
 
     /** Atalho para o recorte padrão dos testes: banco {@value #BANCO}, data {@link #DATA}. */
     static TentativaDebito tentativaAberta(String faturaId) {
         return tentativaAberta(faturaId, 1, BANCO, DATA);
+    }
+
+    /**
+     * A mesma coisa, com valor próprio — é o que a remessa projeta em centavos,
+     * e um cenário de valor único não distinguiria o campo do preenchimento.
+     */
+    static TentativaDebito tentativaAberta(String faturaId, String valor) {
+        return tentativaAberta(faturaId, 1, BANCO, DATA, new BigDecimal(valor));
+    }
+
+    private static TentativaDebito tentativaAberta(String faturaId, int numero, String banco,
+                                                   LocalDate dataRef, BigDecimal valor) {
+        inserirFatura(faturaId, valor);
+        TentativaDebito tentativa = TentativaDebito.aberta(
+                faturaId + "-T" + numero, faturaId, numero, banco, dataRef);
+        new RepositorioTentativaPostgres(AmbienteDeTeste.dados()).inserir(tentativa);
+        return tentativa;
     }
 
     /**
@@ -115,7 +128,7 @@ final class Cenario {
         }
     }
 
-    private static void inserirFatura(String faturaId) {
+    private static void inserirFatura(String faturaId, BigDecimal valor) {
         String sql = """
                 INSERT INTO fatura (id, valor, status) VALUES (?, ?, 'ABERTA')
                 ON CONFLICT (id) DO NOTHING
@@ -123,7 +136,7 @@ final class Cenario {
         try (Connection conexao = AmbienteDeTeste.dados().getConnection();
              PreparedStatement stmt = conexao.prepareStatement(sql)) {
             stmt.setString(1, faturaId);
-            stmt.setBigDecimal(2, VALOR);
+            stmt.setBigDecimal(2, valor);
             stmt.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("falha ao preparar a fatura " + faturaId, e);
