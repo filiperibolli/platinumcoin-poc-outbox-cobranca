@@ -1,4 +1,4 @@
--- Schema do mini-outbox-cobranca.
+-- Schema do ciclo-de-cobranca.
 -- Aplicado pelo docker-compose (via docker-entrypoint-initdb.d) E pelos testes
 -- Testcontainers, a partir deste mesmo arquivo. Se os dois divergirem, o teste
 -- passa e a produção quebra.

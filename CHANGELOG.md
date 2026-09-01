@@ -3,6 +3,69 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [não versionado] — 2026-09-01 — O projeto deixa de se chamar outbox
+
+`mini-outbox-cobranca` → **`ciclo-de-cobranca`**, e o pacote
+`com.platinumcoin.outbox` → `com.platinumcoin.ciclo` nos 107 arquivos.
+
+O nome antigo descrevia o projeto de quando ele tinha seis steps. O outbox é
+**um** dos mecanismos daqui — o que resolve a dificuldade 1, a de duas escritas
+em dois sistemas — e nomear o todo pela parte escondia as outras três: a
+ausência de callback, o mesmo retorno chegando de quatro formas, e o silêncio
+que não é resposta. O nome novo é o do agregado que decide tudo: a montagem do
+ciclo é a única escrita que importa, e todo o resto é trabalho derivado dela.
+
+**O que NÃO foi renomeado**, porque ali `outbox` é o nome certo: a tabela
+`outbox`, `RepositorioOutbox` e sua implementação, `PublicarOutboxUseCase`, a
+rota `POST /outbox/publicar`, o bloco `outbox` do `/estado` e do painel, e o
+ADR-0001. O padrão continua se chamando padrão.
+
+### Alterado
+
+- `pom.xml`: `artifactId`, `name`, `description` e os dois `mainClass`. A
+  descrição antiga — "Outbox transacional para publicação de lançamento contábil
+  sem dual write" — descrevia o step-05, não o projeto.
+- `infra/docker-compose.yml`: o `name:` do projeto Compose e os três
+  `container_name` (`ciclo-postgres`, `ciclo-localstack`, `ciclo-sftp`).
+- `simplelogger.properties`, que silencia um logger pelo nome do nosso pacote.
+- `FundacaoTest` e `ControllerNaoDecideTest` montam caminhos de pacote peça a
+  peça (`Path.of("com", "platinumcoin", "outbox", …)`) para fiscalizar a
+  fronteira arquitetural, e por isso a substituição do literal de pacote não os
+  alcança — os dois foram acompanhados à mão. O modo de falha, verificado por
+  mutação, é `NoSuchFileException` no `Files.walk`: um rename esquecido aqui
+  quebra a suíte em vez de deixá-la verde fiscalizando um diretório que não
+  existe. Vale registrar porque a suspeita inicial era a oposta, e um teste de
+  fronteira que passasse vazio seria o pior resultado possível.
+- `docs/brief.md` **reescrito**. Ele ainda era o brief do step-01: enunciava só
+  a dificuldade 1 e prometia "o que este projeto prova" em termos de dual write.
+  Agora é o enunciado curto e completo — a pergunta, as quatro restrições, as
+  quatro dificuldades, as duas invariantes e a fronteira de responsabilidade —
+  e **para antes da solução**, que é assunto do README. Ganhou também o
+  parágrafo que faltava: por que o mainframe ser legado fecha a porta do
+  exatamente-uma-vez ponta a ponta, e como a pergunta se divide em lançamento
+  *decidido* (nosso) e *efetivado* (do consumidor).
+
+### Verificado
+
+- `mvn test` → **24 classes, 83 testes, 0 falhas** depois do rename.
+- Nenhuma ocorrência de `mini-outbox`, `com.platinumcoin.outbox`,
+  `com/platinumcoin/outbox` ou dos nomes antigos de container sobrou no
+  repositório — varrido nas duas formas, com pontos e com barras.
+- O que **continua** se chamando outbox foi conferido um a um: a tabela e suas
+  duas constraints no schema, `RepositorioOutbox`, `PublicarOutboxUseCase`, a
+  rota, o bloco do painel e o ADR-0001.
+
+AI: est 1h / actual 35min / ~95% generated / 2 issues caught in review
+
+<!--
+As 2: (1) os dois testes de fronteira montam o caminho do pacote como lista de
+literais, e não como string — a substituição global do pacote não os pegaria.
+Presumi que ficariam verdes fiscalizando um diretório inexistente; a mutação
+mostrou que estouram com NoSuchFileException, o que é o comportamento certo.
+(2) a árvore de estrutura do README escreve o pacote com barras
+(`com/platinumcoin/outbox/`), forma que o sed do literal com pontos não pegou —
+achado só na varredura final por `outbox` restante.
+
 ## [step-12] — 2026-09-01 — Painel HTML, e o README como documento de system design
 
 O último step fecha o projeto por onde ele começou: a **pergunta**. O mecanismo
@@ -615,7 +678,7 @@ duplicar.
 - `docker compose up -d` + `mvn compile exec:java` → o cenário roda contra o
   Compose e imprime
   `[envia] C-1 ENVIADO — 5 tentativas SOLICITADO → ENVIADO_PARCEIRO (341-20260831-C-1.rem no SFTP do parceiro)`.
-  `docker exec outbox-sftp ls -l /home/parceiro/remessa` mostra o arquivo com os
+  `docker exec ciclo-sftp ls -l /home/parceiro/remessa` mostra o arquivo com os
   282 bytes do artefato do S3.
 - `CrashDepoisDoPutTest` assere **1** arquivo no destino depois da reexecução, e
   os mesmos bytes da primeira entrega — a janela está documentada, não

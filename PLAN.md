@@ -1,4 +1,4 @@
-# PLAN.md — mini-outbox-cobranca
+# PLAN.md — ciclo-de-cobranca
 
 Os doze steps estão escritos. Este arquivo registra o que cada um entregou.
 

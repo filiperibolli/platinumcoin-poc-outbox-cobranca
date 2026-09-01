@@ -1,4 +1,4 @@
-# CLAUDE.md — mini-outbox-cobranca
+# CLAUDE.md — ciclo-de-cobranca
 
 ## O propósito, acima de qualquer outra regra deste arquivo
 
@@ -137,7 +137,8 @@ seguem o mesmo ciclo:
    nunca escrita de memória.
 5. Atualizar o `CHANGELOG.md` (com a linha de métricas AI) e, se for um step
    novo, marcá-lo no `PLAN.md`.
-6. Commit convencional: `feat(outbox): <o que>`.
+6. Commit convencional: `feat(ciclo): <o que>`. O escopo era `outbox` até o
+   rename, pela mesma razão que o projeto se chamava assim — e mudou junto.
 7. **PARAR.** Não emendar o próximo assunto.
 
 ## Ambiente
