@@ -295,25 +295,65 @@ A recusa também é efeito: montar o mesmo recorte duas vezes devolve `409` com 
 motivo intacto — o `UNIQUE (banco, data_ref)` fazendo o seu trabalho, e não um
 `if` no controller.
 
-E, do outro lado do fio, o **simulador do parceiro** — step-11, ainda plano:
+### Mexer no ambiente: o parceiro e as falhas provocadas
+
+Do outro lado do fio está o **simulador do parceiro**, que lê a remessa do SFTP
+e escreve o retorno:
 
 ```
-POST /parceiro/processar         lê a remessa e escreve o retorno
-                                 (distribuição, particionar, atrasar)
-POST /parceiro/reenviar-retorno  retorno idêntico já processado
-POST /parceiro/retorno-truncado  trailer que não bate com o conteúdo
-POST /parceiro/silencio          não escreve nada — o caso do SEM_RETORNO
-POST /falha/crash-relay          exceção entre o send ao SQS e o UPDATE
-POST /falha/crash-envio          exceção entre o put no SFTP e o commit
+POST /parceiro/processar?resultado=PAGO,NAO_PAGO,ERRO   desfechos em ciclo, na ordem do arquivo
+POST /parceiro/processar?particionar=3                  o mesmo retorno em três arquivos
+POST /parceiro/processar?atrasar=true                   uma parte agora, o resto na próxima chamada
+POST /parceiro/reenviar-retorno                         reescreve, byte a byte, o que já entregou
+POST /parceiro/retorno-truncado                         trailer que não bate com o conteúdo
+POST /parceiro/silencio                                 não escreve nada — o caso do SEM_RETORNO
+POST /falha/crash-relay                                 arma a morte entre o send ao SQS e o UPDATE
+POST /falha/crash-envio                                 arma a morte entre o put no SFTP e o COMMIT
 ```
 
 **O simulador não é o sistema — é o ambiente.** Ele vive num pacote `simulador/`,
 fora de `domain` e de `infra`, não é chamado por nenhum use case, e monta o
 retorno a partir da remessa que leu do SFTP, como o banco parceiro faria.
 Consultar o Postgres para produzir o retorno seria mais simples e destruiria o
-valor da demonstração.
+valor da demonstração: o retorno viraria função do nosso estado, e o dia em que
+a remessa saísse errada o parceiro responderia certo assim mesmo. Há um teste
+que falha se uma linha de `domain/` ou de `infra/` passar a conhecê-lo
+(`FundacaoTest.simuladorEhOAmbienteNaoOSistema`).
 
-O painel (`GET /`) — step-12, também plano — é um único arquivo HTML servido
+As duas falhas do **nosso** lado são decoradores das portas, montados na fiação
+do servidor — não há `if` de simulação dentro de use case nenhum. Armar e
+disparar são chamadas separadas, e é isso que torna a janela visível: entre uma
+e outra existe o estado que o desenho produz.
+
+```bash
+curl -sX POST 'localhost:8080/falha/crash-envio'
+{"falha":"CRASH_ENVIO","dispara":"POST /ciclo/enviar","mensagem":"o processo morreu entre o put e o COMMIT","armadas":["CRASH_ENVIO"]}
+
+curl -sX POST 'localhost:8080/ciclo/enviar?ciclo=C-1'      # 409 — e o arquivo já está no parceiro
+curl -sX POST 'localhost:8080/ciclo/enviar?ciclo=C-1'      # converge: UM arquivo, tentativas ENVIADO_PARCEIRO
+```
+
+Cada botão existe para mostrar um mecanismo, e só ele:
+
+| botão | o que fica visível |
+|---|---|
+| `processar` | o caminho feliz, e que só `PAGO` gera linha no outbox |
+| `particionar` | vários arquivos por ciclo convergindo para o mesmo estado |
+| `atrasar` | o retorno que chega pela metade; o resto continua `ENVIADO_PARCEIRO` |
+| `reenviar-retorno` | os mesmos bytes reconhecidos pelo `sha256`, sem reprocessamento |
+| `retorno-truncado` | trailer que não fecha, arquivo descartado inteiro |
+| `silencio` | `SEM_RETORNO` no fechamento — silêncio não é recusa |
+| `crash-relay` | at-least-once: a duplicata que o consumidor deduplica |
+| `crash-envio` | a janela entre efeito externo e commit, sem transação possível |
+
+A **quiescência** — o arquivo que cresce entre as duas leituras de atributos e
+por isso não é baixado — não tem botão, e não por esquecimento: provocá-la
+exigiria um parceiro escrevendo por temporizador, e a demonstração passaria a
+depender de qual das duas coisas chegou primeiro. Ela continua provada por
+`ArquivoEmEscritaNaoEhBaixadoTest`, onde o crescimento acontece exatamente entre
+as duas leituras.
+
+O painel (`GET /`) — step-12, ainda plano — é um único arquivo HTML servido
 pelo Spring, sem build e sem CDN: botões na ordem do fluxo, uma seção separada
 para provocar falhas, o estado das cinco fontes por polling de 2s e um log
 append-only de cada transição.
@@ -358,6 +398,8 @@ docker compose -f infra/docker-compose.yml exec postgres \
 | `UNIQUE (fatura_id)` no outbox | só a guarda no código | o segundo lançamento estoura em vez de ser ignorado silenciosamente |
 | JDBC puro no domínio, sem `@Transactional` | Spring Data / `@Transactional` | mais código de encanamento — em troca, a fronteira transacional fica visível no código, que é justamente o que o projeto quer mostrar |
 | Artefato durável no S3 entre geração e transmissão ([ADR-0003](docs/adr/0003-artefato-duravel-no-s3-em-vez-de-geracao-em-memoria.md)) | regerar a remessa a cada tentativa de envio | um serviço a mais no teto de infra, latência de um `get` antes do `put`, e expurgo que ninguém faz |
+| Simulador em pacote próprio, enxergando só arquivos | montar o retorno consultando o Postgres | um parser de remessa e uma conexão SSH a mais, escritos do lado do parceiro — em troca de o retorno não ser função do nosso próprio estado |
+| Falhas provocadas como decoradores de porta | um `if (simularCrash)` dentro do use case | dois arquivos e três linhas de fiação — em troca de o código de produção continuar sendo o que se lê |
 | Nome determinístico no SFTP | sufixo por tentativa (`-1`, `-2`) | reenvio sobrescreve em vez de acumular — mas o parceiro que já leu processa duas vezes, e quem absorve é o `UPDATE` condicional |
 | Trailer decide completude; arquivo que não fecha é descartado inteiro | aplicar as linhas que deram para ler | uma passada perdida — em troca de não produzir um retorno parcial indistinguível de um legítimo |
 | Cada passo é um endpoint, não um cron | `@Scheduled` no próprio serviço | é preciso chamar para acontecer — que é exatamente o ponto: dá para executar o passo quando se quer olhar para ele |
@@ -452,16 +494,18 @@ src/main/java/...
   infra/config           Ambiente — o único lugar que lê configuração
                          Fiacao — os mesmos objetos do Main, para o Spring
   infra/consulta         EstadoDoMundo — o retrato das cinco fontes
-  simulador/             o banco parceiro e as falhas provocáveis
+  infra/falha            decoradores das portas: as duas falhas provocáveis
+  simulador/             o banco parceiro: lê a remessa, escreve o retorno
                          — o AMBIENTE, não o sistema
   Main                   o cenário ponta a ponta, com cada transição impressa
   AplicacaoHttp          o servidor
 src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
 
-O `simulador/` e o painel são os steps 11 e 12 — plano, não código. O resto
-existe: `api/http` mais o `AplicacaoHttp` são o step-10, a coleta do retorno é o
-step-09, e o armazenamento no S3 e a transmissão por SFTP são os steps 07 e 08.
+O painel é o step-12 — plano, não código. O resto existe: o `simulador/` e o
+`infra/falha` são o step-11, `api/http` mais o `AplicacaoHttp` são o step-10, a
+coleta do retorno é o step-09, e o armazenamento no S3 e a transmissão por SFTP
+são os steps 07 e 08.
 Ver [PLAN.md](PLAN.md) para o que já está escrito e o que ainda é plano.
 
 Máquina de estados:
