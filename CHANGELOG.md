@@ -3,6 +3,133 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-12] — 2026-09-01 — Painel HTML, e o README como documento de system design
+
+O último step fecha o projeto por onde ele começou: a **pergunta**. O mecanismo
+agora pode ser visto acontecendo numa tela, e o README deixa de ser um guia de
+uso para virar o que o projeto sempre foi — um problema de system design escrito
+por inteiro, com a solução e o preço de cada decisão.
+
+O painel é um arquivo. Botões na ordem do fluxo, com o `parceiro processa` **no
+meio** — porque é ali que ele age, e uma lista de rotas que o omite manda o
+leitor chamar `coletar` num diretório vazio. Falhas em seção separada, por cor e
+por título: operar o sistema e sabotá-lo não podem se parecer.
+
+A demonstração que o painel torna possível, e que nenhum `curl` isolado dava:
+
+```
+outbox   F-20260901-1 PENDENTE   F-20260901-3 PENDENTE   F-20260901-4 PENDENTE
+fila     mensagens 1   chaveDedup: F-20260901-1
+```
+
+A mensagem já está na fila e a linha ainda diz `PENDENTE`. É a janela do relay,
+inteira, em duas linhas de tela.
+
+### Adicionado
+
+- **`resources/static/index.html`** — o painel. HTML, CSS e JS puro, tudo inline,
+  sem build e sem CDN. Um `npm install` para observar um mecanismo de backend
+  seria a contradição óbvia; um `<script src="https://…">` seria pior, porque
+  transformaria um demo local numa coisa que só funciona com internet.
+- **`PainelEhServidoTest`** — três asserções: a raiz devolve HTML com um botão
+  por passo (inclusive o do parceiro), nenhum `src`/`href` aponta para fora, e
+  **os blocos que o painel pinta são os que o `/estado` devolve**. A terceira
+  existe porque o painel lê seis campos por nome em JavaScript, onde um rename
+  no `Retrato` não quebra a compilação — vira um bloco vazio que ninguém
+  relaciona com a mudança feita três semanas antes.
+- **`ClienteHttp.pagina()`** — busca uma página como um navegador buscaria. O
+  `Accept: text/html` não é decoração: a página de boas-vindas do Spring só
+  responde a quem pede HTML, e o `Accept: application/json` dos outros métodos
+  recebe 404 do mesmo servidor.
+
+### Alterado
+
+- **`EstadoDoMundo` cresceu para servir a tela**, em três pontos e por um motivo
+  cada:
+  - **outbox vira lista, não contagem.** De tentativas há dezenas e só a
+    distribuição importa; do outbox há no máximo uma linha por fatura, e **qual**
+    está pendente é a informação. Uma contagem por status esconderia exatamente
+    o par "F-1 PENDENTE / F-1 já na fila".
+  - **artefatos com tamanho**, que o `listObjectsV2` já devolvia e era descartado.
+  - **a fila é espiada, não só contada.** `receiveMessage` com
+    `visibilityTimeout=0` — a mensagem volta a ficar visível no mesmo instante.
+    Sem isso a duplicata do `crash-relay` seria "o contador subiu de 3 para 4"; o
+    que ela tem de demonstrável é a **mesma** `chaveDedup` duas vezes.
+- **README reescrito** em torno da pergunta e das **quatro dificuldades** que ela
+  esconde: duas escritas em dois sistemas (duas vezes no fluxo), a ausência de
+  callback, o mesmo retorno chegando de quatro formas, e o silêncio que não é
+  resposta. Ganhou um **teste de mesa** — o ciclo percorrido à mão, com o estado
+  das tabelas depois de cada passo e "e se morrer aqui?" nos dois pontos em que
+  isso importa — e dois diagramas novos: um `sequenceDiagram` das duas janelas e
+  um `stateDiagram` da máquina de estados.
+- **Os mecanismos passaram a ser descritos como duas famílias.** Escrita
+  transacional, trabalho derivado e transição condicional garantem **correção
+  sob falha** e valem para qualquer integração assíncrona. Quiescência, trailer
+  e `SEM_RETORNO` garantem outra coisa — que o sistema **não afirme o que
+  ninguém disse** — e existem porque o canal é um diretório e o parceiro é mudo.
+  A lista antiga dizia "três mecanismos, e de mais nenhum" e deixava as
+  dificuldades 2 e 4 sem casa.
+
+### Removido
+
+- **`Fatura.Status.LANCADA`**, do enum e do `CHECK` do schema. Nada nunca o
+  escreveu. Quem responde "o lançamento saiu?" é o outbox, que tem
+  `UNIQUE (fatura_id)` — uma linha por fatura, por construção. Um estado na
+  fatura seria uma segunda cópia do mesmo fato, livre para divergir da primeira:
+  o dual write que o ADR-0001 recusa, em escala menor. E marcá-lo exigiria um
+  `UPDATE` **depois** do `send`, dentro exatamente da janela que o projeto existe
+  para discutir.
+
+### Corrigido
+
+Sete divergências entre o README e o código, encontradas numa auditoria antes
+deste step:
+
+- o texto de abertura afirmava que o painel existia, três seções depois de dizer
+  que era plano;
+- a lista de endpoints omitia `/parceiro/processar` — quem seguia a ordem
+  impressa chamava `coletar` num diretório vazio e recebia `{"vistos":0}` sem
+  explicação;
+- a máquina de estados publicava `ABERTA → PAGA → LANCADA`, uma transição que
+  nenhum código fazia;
+- a linha do `reenviar-retorno` creditava a segurança ao `sha256`, quando o
+  próprio `ColetarRetornoUseCase` diz em comentário que o hash é só um atalho de
+  custo e quem garante é o `UPDATE` condicional;
+- a tabela `arquivo_retorno` não era mencionada uma única vez, apesar de ser
+  onde esse atalho mora;
+- a árvore de estrutura omitia `domain/exception`, `Sha256` e três portas —
+  entre elas `Transacao`, que é a fronteira transacional, o assunto do projeto;
+- `POST /faturas` repetido devolve 409 (os ids derivam da data) e isso não
+  estava documentado.
+
+### Verificado
+
+- `mvn test` → **24 classes, 83 testes, 0 falhas**, sem variável de ambiente e
+  sem o Compose no ar.
+- **O teste de mesa foi conferido contra o código**, e não escrito de memória: os
+  282 bytes e o `sha256=588b15cc…` da remessa do cenário foram reproduzidos à
+  mão a partir das larguras de campo e batem com a execução real; o SQL de cada
+  passo foi copiado dos repositórios, com as guardas de status que a primeira
+  versão do texto havia omitido.
+- **O ciclo inteiro percorrido pela API com o Compose no ar**, na ordem que o
+  README imprime: `bytes:233` e `detalhes:4` conforme documentado,
+  `POST /ciclo/coletar` antes do parceiro devolvendo `{"vistos":0,...}` como o
+  texto avisa, e o `crash-relay` produzindo 4 mensagens com 3 chaves distintas.
+- A asserção de contrato entre painel e `/estado` foi checada por mutação:
+  renomear um `id` no HTML faz `PainelEhServidoTest` falhar.
+
+AI: est 4h / actual 2h05 / ~95% generated / 3 issues caught in review
+
+<!--
+As 3: (1) o teste de mesa trazia um layout de remessa inventado e SQL sem as
+guardas de status — só apareceu ao conferir campo a campo contra `Remessa.java`
+e os repositórios; (2) o parágrafo do painel dizia "uma fatura ainda PENDENTE"
+quando o crash deixa três pendentes e uma delas já na fila — só apareceu ao
+rodar o ciclo de verdade contra o Compose; (3) a contagem de baseline "24
+classes / 86 testes" vinha de relatórios surefire velhos misturados no `target/`;
+o número real antes deste step era 23 classes / 80 testes.
+-->
+
 ## [step-11] — 2026-08-31 — Simulador do parceiro e provocação de falhas
 
 As falhas que o desenho defende deixam de morar em classes de teste e passam a

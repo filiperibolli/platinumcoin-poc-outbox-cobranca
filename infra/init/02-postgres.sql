@@ -6,7 +6,7 @@
 CREATE TABLE fatura (
     id     TEXT           PRIMARY KEY,
     valor  NUMERIC(15, 2) NOT NULL,
-    status TEXT           NOT NULL CHECK (status IN ('ABERTA', 'PAGA', 'LANCADA'))
+    status TEXT           NOT NULL CHECK (status IN ('ABERTA', 'PAGA'))
 );
 
 -- O ciclo de cobrança: o conjunto de tentativas transmitido a um banco parceiro
