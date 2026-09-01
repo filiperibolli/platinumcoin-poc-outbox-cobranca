@@ -1,12 +1,12 @@
 # Sobe o ambiente completo com `docker compose -f infra/docker-compose.yml up`.
 # Zero passo manual: o schema e a fila são criados pelos scripts de init.
-name: mini-outbox-cobranca
+name: ciclo-de-cobranca
 
 services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: outbox-postgres
+    container_name: ciclo-postgres
     environment:
       POSTGRES_DB: cobranca
       POSTGRES_USER: cobranca
@@ -25,7 +25,7 @@ services:
 
   localstack:
     image: localstack/localstack:3.8
-    container_name: outbox-localstack
+    container_name: ciclo-localstack
     environment:
       # Teto de infra do projeto: Postgres + dois serviços AWS.
       SERVICES: sqs,s3
@@ -46,7 +46,7 @@ services:
   # dentro do chroot do usuário — do lado do cliente eles são a raiz.
   sftp:
     image: atmoz/sftp:alpine
-    container_name: outbox-sftp
+    container_name: ciclo-sftp
     command: parceiro:parceiro:::remessa,retorno
     ports:
       - "2222:22"

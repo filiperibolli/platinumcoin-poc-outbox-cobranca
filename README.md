@@ -1,4 +1,4 @@
-# mini-outbox-cobranca
+# ciclo-de-cobranca
 
 Um problema de system design, escrito por inteiro, e resolvido em código que
 roda. O código não é a ilustração do documento — é a prova dele: **cada
@@ -7,6 +7,11 @@ os nomes desses testes estão citados ao lado de cada afirmação.
 
 Java 21 · Maven · Postgres · SQS e S3 (LocalStack) · SFTP (`atmoz/sftp`) ·
 Spring Boot (Web).
+
+O nome é o do agregado que decide tudo: **a montagem do ciclo é a única escrita
+que importa**, e remessa, retorno, fechamento e publicação são trabalho derivado
+dela. O outbox é um dos mecanismos aqui dentro — o que resolve a dificuldade 1 —,
+não o assunto.
 
 ### Como ler
 
@@ -928,12 +933,13 @@ que compreender o mecanismo vale mais que manter o projeto pequeno.
 teste que falha se isso mudar (`FundacaoTest.dominioIsolado`).
 
 ```
-docs/brief.md            o contexto e o problema
+docs/brief.md            o enunciado curto: a pergunta, as restrições
+                         e as quatro dificuldades, sem a solução
 docs/adr/                as três decisões que sustentam o projeto
 docs/steps/              o que cada step entrega e sua Definition of Done
 infra/                   docker-compose + scripts de init (schema, fila, bucket)
 
-src/main/java/com/platinumcoin/outbox/
+src/main/java/com/platinumcoin/ciclo/
   domain/model           Fatura, CicloCobranca, TentativaDebito, Remessa,
                          LancamentoContabil, RegistroOutbox, ChaveArtefato, Sha256
   domain/port            RepositorioFatura, RepositorioCiclo, RepositorioTentativa,
