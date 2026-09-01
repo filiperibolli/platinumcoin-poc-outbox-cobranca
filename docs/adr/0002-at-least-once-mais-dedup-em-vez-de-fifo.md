@@ -77,3 +77,16 @@ explicitamente, e não escondida atrás de uma configuração de fila:
   interface, com a mesma força de um campo obrigatório do payload.
 - Se o mainframe não puder deduplicar, este desenho não serve — seria preciso um
   gateway idempotente na frente dele. Fica registrado como o limite conhecido.
+
+**Onde isto é observável.** Desde o [ADR-0004](0004-aplicacao-em-container-atras-de-um-perfil.md)
+a janela não precisa mais ser deduzida do teste. Com `POST /falha/crash-relay`
+armado, o `docker compose logs -f app` mostra as duas linhas na ordem que
+importa — e a segunda nunca chega:
+
+```
+[fila]    linha 1 enviada (chaveDedup=F-20260901-1) — a linha ainda diz PENDENTE
+[crash]   linha 1 — a mensagem JÁ saiu e o UPDATE não vem (janela B)
+```
+
+A janela só existe na **sequência**: no estado final ela já passou, e é por isso
+que o painel sozinho não a mostraria.

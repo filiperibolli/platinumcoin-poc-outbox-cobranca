@@ -5,6 +5,8 @@ import com.platinumcoin.ciclo.domain.model.LancamentoContabil;
 import com.platinumcoin.ciclo.domain.model.RegistroOutbox;
 import com.platinumcoin.ciclo.domain.port.RepositorioOutbox;
 import com.platinumcoin.ciclo.domain.port.Transacao;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -24,6 +26,8 @@ import java.util.List;
  * step-06 continua provocando o seu crash com o decorador dele.
  */
 public final class MorreAoMarcarPublicado implements RepositorioOutbox {
+
+    private static final Logger log = LoggerFactory.getLogger(MorreAoMarcarPublicado.class);
 
     private final RepositorioOutbox real;
     private final FalhasArmadas falhas;
@@ -49,6 +53,8 @@ public final class MorreAoMarcarPublicado implements RepositorioOutbox {
             // A mensagem já saiu — quem chama este método é o relay, depois do
             // send. A linha continua PENDENTE, e é isso que autoriza a próxima
             // passada a republicar a mesma chaveDedup.
+            log.info("[crash]   linha {} — a mensagem JÁ saiu e o UPDATE não vem (janela B)",
+                    registroId);
             throw new FalhaDePersistencia(FalhasArmadas.Falha.CRASH_RELAY.mensagem());
         }
         return real.marcarPublicado(registroId);

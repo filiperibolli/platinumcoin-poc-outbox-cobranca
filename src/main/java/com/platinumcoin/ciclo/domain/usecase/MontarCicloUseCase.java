@@ -4,6 +4,9 @@ import com.platinumcoin.ciclo.domain.model.CicloCobranca;
 import com.platinumcoin.ciclo.domain.port.RepositorioCiclo;
 import com.platinumcoin.ciclo.domain.port.Transacao;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.LocalDate;
 
 /**
@@ -28,6 +31,8 @@ import java.time.LocalDate;
  */
 public final class MontarCicloUseCase {
 
+    private static final Logger log = LoggerFactory.getLogger(MontarCicloUseCase.class);
+
     private final Transacao.Fabrica transacoes;
     private final RepositorioCiclo ciclos;
 
@@ -47,6 +52,8 @@ public final class MontarCicloUseCase {
             ciclos.criar(tx, ciclo);
             int tentativas = ciclos.atribuirTentativasAbertas(tx, ciclo);
             tx.commit();
+            log.info("[ciclo]   {} MONTADO — {} tentativas ABERTO → SOLICITADO (banco {}, {})",
+                    cicloId, tentativas, banco, dataRef);
             return new Resultado(ciclo, tentativas);
         }
     }

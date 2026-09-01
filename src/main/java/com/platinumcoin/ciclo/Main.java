@@ -138,6 +138,12 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // O cenário do console É a saída do programa — a mesma razão pela qual
+        // o simplelogger.properties já silencia o handshake do sshj. Os logs que
+        // o servidor emite contam a MESMA história, e interleavados com estas
+        // linhas contariam duas vezes. No container eles são a única história, e
+        // por isso a decisão mora aqui, e não no arquivo de propriedades.
+        System.setProperty("org.slf4j.simpleLogger.log.com.platinumcoin.ciclo", "warn");
         new Main(Ambiente.doProcesso(), System.out).executar();
     }
 

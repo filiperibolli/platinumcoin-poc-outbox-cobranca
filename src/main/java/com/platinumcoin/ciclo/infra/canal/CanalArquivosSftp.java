@@ -11,6 +11,8 @@ import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import net.schmizz.sshj.xfer.InMemoryDestFile;
 import net.schmizz.sshj.xfer.InMemorySourceFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -38,6 +40,8 @@ import java.util.Optional;
  */
 public final class CanalArquivosSftp implements CanalArquivos {
 
+    private static final Logger log = LoggerFactory.getLogger(CanalArquivosSftp.class);
+
     /**
      * O diretório combinado com o parceiro. Não é configuração: é contrato,
      * como as posições dos campos da remessa.
@@ -57,6 +61,7 @@ public final class CanalArquivosSftp implements CanalArquivos {
                 sftp.put(new Artefato(nome, conteudo), DIRETORIO_REMESSA + "/" + nome);
                 return null;
             });
+            log.info("[parceiro] put {}/{} — {} bytes", DIRETORIO_REMESSA, nome, conteudo.length);
         } catch (IOException e) {
             // Traduz antes de atravessar a porta, como o publicador do SQS: o
             // use case não pode depender de um tipo de biblioteca SSH para
@@ -69,11 +74,13 @@ public final class CanalArquivosSftp implements CanalArquivos {
     @Override
     public List<String> listar(String diretorio) {
         try {
-            return conectado(sftp -> sftp.ls(diretorio).stream()
+            List<String> arquivos = conectado(sftp -> sftp.ls(diretorio).stream()
                     .filter(RemoteResourceInfo::isRegularFile)
                     .map(RemoteResourceInfo::getPath)
                     .sorted()
                     .toList());
+            log.info("[parceiro] ls {} — {}", diretorio, arquivos.isEmpty() ? "vazio" : arquivos);
+            return arquivos;
         } catch (IOException e) {
             throw new FalhaDePersistencia("falha ao listar " + diretorio + " no parceiro", e);
         }
@@ -82,13 +89,18 @@ public final class CanalArquivosSftp implements CanalArquivos {
     @Override
     public Optional<CanalArquivos.Atributos> atributos(String caminho) {
         try {
-            return conectado(sftp -> {
+            Optional<CanalArquivos.Atributos> lidos = conectado(sftp -> {
                 // statExistence e não stat: o arquivo que sumiu entre a listagem
                 // e esta pergunta é resposta, não erro — ver a porta.
                 FileAttributes atributos = sftp.statExistence(caminho);
                 return Optional.ofNullable(atributos).map(
-                        lidos -> new CanalArquivos.Atributos(lidos.getSize(), lidos.getMtime()));
+                        lido -> new CanalArquivos.Atributos(lido.getSize(), lido.getMtime()));
             });
+            // Duas linhas destas por arquivo, por passada: é a quiescência
+            // acontecendo. Tamanhos diferentes entre elas = ainda escrevendo.
+            log.info("[parceiro] stat {} — {}", caminho,
+                    lidos.map(a -> a.tamanho() + " bytes, modificadoEm " + a.modificadoEm()).orElse("não existe"));
+            return lidos;
         } catch (IOException e) {
             throw new FalhaDePersistencia("falha ao consultar " + caminho + " no parceiro", e);
         }
@@ -97,11 +109,13 @@ public final class CanalArquivosSftp implements CanalArquivos {
     @Override
     public byte[] baixar(String caminho) {
         try {
-            return conectado(sftp -> {
+            byte[] baixado = conectado(sftp -> {
                 ByteArrayOutputStream recebido = new ByteArrayOutputStream();
                 sftp.get(caminho, new Recebido(recebido));
                 return recebido.toByteArray();
             });
+            log.info("[parceiro] get {} — {} bytes", caminho, baixado.length);
+            return baixado;
         } catch (IOException e) {
             throw new FalhaDePersistencia("falha ao baixar " + caminho + " do parceiro", e);
         }

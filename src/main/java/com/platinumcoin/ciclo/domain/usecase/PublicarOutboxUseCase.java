@@ -3,6 +3,10 @@ package com.platinumcoin.ciclo.domain.usecase;
 import com.platinumcoin.ciclo.domain.model.RegistroOutbox;
 import com.platinumcoin.ciclo.domain.port.PublicadorLancamento;
 import com.platinumcoin.ciclo.domain.port.RepositorioOutbox;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 /**
  * O relay: entrega ao mundo externo o que a transação de negócio deixou
@@ -35,6 +39,8 @@ import com.platinumcoin.ciclo.domain.port.RepositorioOutbox;
  */
 public final class PublicarOutboxUseCase {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicarOutboxUseCase.class);
+
     private final RepositorioOutbox outbox;
     private final PublicadorLancamento publicador;
 
@@ -55,13 +61,24 @@ public final class PublicarOutboxUseCase {
      * @return quantas linhas saíram de {@code PENDENTE} nesta passada.
      */
     public int executar(int limite) {
+        List<RegistroOutbox> pendentes = outbox.pendentes(limite);
+        log.info("[relay]   {} linha(s) PENDENTE nesta passada", pendentes.size());
+
         int publicados = 0;
-        for (RegistroOutbox registro : outbox.pendentes(limite)) {
+        for (RegistroOutbox registro : pendentes) {
             // O id que o destino devolve é do transporte, não do domínio: não
             // vira estado nem coluna. O que o relay precisa saber é se a linha
             // saiu de PENDENTE, e isso quem responde é o UPDATE abaixo.
             publicador.publicar(registro.lancamento());
-            publicados += outbox.marcarPublicado(registro.id());
+            // A janela B está aberta exatamente aqui: a mensagem saiu e a linha
+            // ainda diz PENDENTE. Duas linhas de log, e não uma, porque é a
+            // sequência — não o estado final — que mostra a janela.
+            log.info("[fila]    linha {} enviada (chaveDedup={}) — a linha ainda diz PENDENTE",
+                    registro.id(), registro.lancamento().chaveDedup());
+            int marcadas = outbox.marcarPublicado(registro.id());
+            log.info("[outbox]  linha {} PENDENTE → PUBLICADO  ({} linha afetada)",
+                    registro.id(), marcadas);
+            publicados += marcadas;
         }
         return publicados;
     }

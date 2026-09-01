@@ -7,6 +7,9 @@ import com.platinumcoin.ciclo.domain.port.CanalArquivos;
 import com.platinumcoin.ciclo.domain.port.RepositorioCiclo;
 import com.platinumcoin.ciclo.domain.port.Transacao;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Transmite ao parceiro a remessa que o step-07 deixou gravada, e só então
  * registra que ela saiu.
@@ -28,6 +31,8 @@ import com.platinumcoin.ciclo.domain.port.Transacao;
  * transmissão a registrar.
  */
 public final class EnviarRemessaUseCase {
+
+    private static final Logger log = LoggerFactory.getLogger(EnviarRemessaUseCase.class);
 
     private final Transacao.Fabrica transacoes;
     private final RepositorioCiclo ciclos;
@@ -56,11 +61,18 @@ public final class EnviarRemessaUseCase {
 
         // DECISÃO: put no parceiro antes do COMMIT — a janela é conhecida e testada,
         // ver docs/steps/step-08.md e CrashDepoisDoPutTest
-        canal.enviar(ChaveArtefato.nomeDaRemessaNoParceiro(ciclo), artefato);
+        String nomeNoParceiro = ChaveArtefato.nomeDaRemessaNoParceiro(ciclo);
+        canal.enviar(nomeNoParceiro, artefato);
+        // A janela A está aberta entre esta linha e o COMMIT abaixo: o parceiro
+        // já tem o arquivo e o banco ainda não sabe.
+        log.info("[envia]   {} {} entregue ao parceiro — {} bytes, ANTES do COMMIT",
+                cicloId, nomeNoParceiro, artefato.length);
 
         try (Transacao tx = transacoes.abrir()) {
             int transmitidas = ciclos.registrarEnvio(tx, cicloId);
             tx.commit();
+            log.info("[envia]   {} ENVIADO — {} tentativas SOLICITADO → ENVIADO_PARCEIRO",
+                    cicloId, transmitidas);
             return transmitidas;
         }
     }

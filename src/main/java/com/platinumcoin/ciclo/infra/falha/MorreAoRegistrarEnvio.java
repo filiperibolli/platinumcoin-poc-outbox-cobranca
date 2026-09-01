@@ -5,6 +5,8 @@ import com.platinumcoin.ciclo.domain.model.ChaveArtefato;
 import com.platinumcoin.ciclo.domain.model.CicloCobranca;
 import com.platinumcoin.ciclo.domain.port.RepositorioCiclo;
 import com.platinumcoin.ciclo.domain.port.Transacao;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.util.Optional;
@@ -23,6 +25,8 @@ import java.util.Optional;
  * mesmo recorte do decorador de {@code CrashDepoisDoPutTest}.
  */
 public final class MorreAoRegistrarEnvio implements RepositorioCiclo {
+
+    private static final Logger log = LoggerFactory.getLogger(MorreAoRegistrarEnvio.class);
 
     private final RepositorioCiclo real;
     private final FalhasArmadas falhas;
@@ -61,6 +65,8 @@ public final class MorreAoRegistrarEnvio implements RepositorioCiclo {
     @Override
     public int registrarEnvio(Transacao tx, String cicloId) {
         if (falhas.dispara(FalhasArmadas.Falha.CRASH_ENVIO)) {
+            log.info("[crash]   {} — o arquivo JÁ está no parceiro e o COMMIT não vem (janela A)",
+                    cicloId);
             throw new FalhaDePersistencia(FalhasArmadas.Falha.CRASH_ENVIO.mensagem());
         }
         return real.registrarEnvio(tx, cicloId);

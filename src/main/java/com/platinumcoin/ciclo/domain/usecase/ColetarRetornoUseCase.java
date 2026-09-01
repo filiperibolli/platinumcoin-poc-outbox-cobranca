@@ -6,6 +6,8 @@ import com.platinumcoin.ciclo.domain.port.ArmazenamentoArtefato;
 import com.platinumcoin.ciclo.domain.port.CanalArquivos;
 import com.platinumcoin.ciclo.domain.port.LeitorDeRetorno;
 import com.platinumcoin.ciclo.domain.port.RepositorioArquivoRetorno;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -43,6 +45,8 @@ import java.util.Optional;
  * por horário.
  */
 public final class ColetarRetornoUseCase {
+
+    private static final Logger log = LoggerFactory.getLogger(ColetarRetornoUseCase.class);
 
     /** O diretório combinado com o parceiro — contrato, como as posições dos campos. */
     private static final String DIRETORIO_RETORNO = "/retorno";
@@ -91,8 +95,11 @@ public final class ColetarRetornoUseCase {
 
     /** Uma passada. Um resultado por arquivo visto — inclusive os que não passaram. */
     public List<Resultado> executar() {
+        List<String> vistos = canal.listar(DIRETORIO_RETORNO);
+        log.info("[coleta]  {} arquivo(s) em {} do parceiro", vistos.size(), DIRETORIO_RETORNO);
+
         List<Resultado> passada = new ArrayList<>();
-        for (String caminho : canal.listar(DIRETORIO_RETORNO)) {
+        for (String caminho : vistos) {
             passada.add(coletar(caminho));
         }
         return List.copyOf(passada);
@@ -101,6 +108,7 @@ public final class ColetarRetornoUseCase {
     private Resultado coletar(String caminho) {
         String nome = caminho.substring(caminho.lastIndexOf('/') + 1);
         if (!quiesceu(caminho)) {
+            log.info("[coleta]  {} EM_ESCRITA — cresceu entre as duas leituras, não baixado", nome);
             return new Resultado(nome, Desfecho.EM_ESCRITA, 0, 0);
         }
 
@@ -112,6 +120,8 @@ public final class ColetarRetornoUseCase {
             // inteiro — e ele só cobre este caso. Um reenvio com uma linha a
             // mais tem hash diferente e passa direto daqui, porque quem sabe o
             // que já foi aplicado é o UPDATE condicional, não esta tabela.
+            log.info("[coleta]  {} REPETIDO — sha256={} já aplicado, nada a reprocessar",
+                    nome, sha256);
             return new Resultado(nome, Desfecho.REPETIDO, 0, 0);
         }
 
@@ -127,6 +137,9 @@ public final class ColetarRetornoUseCase {
             // o que dá — meia aplicação é indistinguível de um retorno legítimo
             // menor, e o fechamento do ciclo transformaria o resto em
             // SEM_RETORNO, afirmando silêncio onde havia ruído. Ver step-09.
+            log.info("[coleta]  {} INCOMPLETO — o trailer não fecha, descartado INTEIRO"
+                            + " ({} linhas lidas, 0 aplicadas)",
+                    nome, retorno.quantidadeDeLinhas());
             return new Resultado(nome, Desfecho.INCOMPLETO, retorno.quantidadeDeLinhas(), 0);
         }
 
@@ -137,6 +150,8 @@ public final class ColetarRetornoUseCase {
         // passada curto-circuitaria o arquivo que ainda tinha o que aplicar.
         arquivos.registrar(nome, sha256, retorno.cicloId(), retorno.quantidadeDeLinhas());
 
+        log.info("[coleta]  {} APLICADO — {} linhas, {} aplicadas, sha256={}",
+                nome, retorno.quantidadeDeLinhas(), aplicadas, sha256);
         return new Resultado(nome, Desfecho.APLICADO, retorno.quantidadeDeLinhas(), aplicadas);
     }
 
