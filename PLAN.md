@@ -1,6 +1,6 @@
 # PLAN.md — mini-outbox-cobranca
 
-Um step por sessão. O primeiro step **não marcado** é o próximo a executar.
+Os doze steps estão escritos. Este arquivo registra o que cada um entregou.
 
 A ordem segue o ciclo de vida real da cobrança: monta, envia, recebe retorno,
 fecha, publica. Não a ordem em que as peças foram pensadas.
@@ -82,11 +82,16 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   truncado, reenviado ou nenhum. Mais os dois crashes provocáveis por `POST`.
   Testes: `SimuladorProduzRetornoAplicavelTest`, `FalhasProvocadasTest`.
 
-- [ ] **step-12 — Painel HTML** · [docs/steps/step-12.md](docs/steps/step-12.md)
+- [x] **step-12 — Painel HTML** · [docs/steps/step-12.md](docs/steps/step-12.md)
   Um arquivo estático servido pelo Spring — HTML, CSS e JS puro, sem build e
-  sem CDN. Botões na ordem do fluxo, falhas em seção separada, estado por
-  polling de 2s e log de eventos append-only.
-  Teste: `PainelEhServidoTest`.
+  sem CDN. Botões na ordem do fluxo (com o `parceiro processa` no meio, onde
+  ele precisa estar), falhas em seção separada, estado por polling de 2s e log
+  de eventos append-only.
+  O `/estado` cresceu para servi-lo: o outbox passou a vir como **linhas** em
+  vez de contagem, os artefatos com tamanho, e a fila com as `chavesDedup` de
+  uma espiada (`visibilityTimeout=0`). Sem isso a duplicata do relay seria "o
+  contador subiu de 3 para 4"; com isso é a MESMA chave duas vezes.
+  Testes: `PainelEhServidoTest`.
 
 ## O que os steps 07–12 acrescentam
 
@@ -124,7 +129,7 @@ TentativaDebito
                                          → SEM_RETORNO (via fechamento)
 
 CicloCobranca   MONTADO → ENVIADO → FECHADO
-Fatura          ABERTA → PAGA → LANCADA
+Fatura          ABERTA → PAGA
 ```
 
 Só `PAGO` gera linha no outbox — a pergunta é
@@ -187,7 +192,7 @@ cinco use cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o
 `TransacaoJdbc`, os quatro repositórios, o `Payload`, o
 `PublicadorLancamentoSqs` e o `Main`, que amarra as peças num cenário só.
 
-O que está marcado com (12) é plano, não código. A régua para julgá-lo é
-a mesma: cada arquivo com uma responsabilidade que dá para nomear sem usar "e".
-Se um step apertar, corta-se **escopo** — regra de negócio, canal, formato —
+Tudo acima existe. A régua que foi usada para julgar cada acréscimo: cada
+arquivo com uma responsabilidade que dá para nomear sem usar "e". Quando o
+escopo apertou, cortou-se **escopo** — regra de negócio, canal, formato —
 nunca os testes de falha.

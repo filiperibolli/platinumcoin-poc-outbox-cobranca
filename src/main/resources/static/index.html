@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-outbox-cobranca — painel do ciclo</title>
+<style>
+  :root {
+    --fundo: #11131a; --painel: #191c26; --borda: #2a2f3d; --texto: #e5e8f0;
+    --fraco: #8b93a7; --acento: #5b9dff; --ok: #46c88a; --perigo: #ff6b6b;
+    --alerta: #f0b445; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fundo); color: var(--texto);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid var(--borda);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 16px; letter-spacing: .3px; }
+  header p { margin: 0; color: var(--fraco); font-size: 13px; }
+  main {
+    display: grid; grid-template-columns: 260px 1fr 380px;
+    gap: 16px; padding: 16px; align-items: start;
+  }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+
+  section {
+    background: var(--painel); border: 1px solid var(--borda);
+    border-radius: 8px; padding: 14px;
+  }
+  section > h2 {
+    margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--fraco);
+  }
+  section > .nota { margin: 0 0 10px; font-size: 12px; color: var(--fraco); }
+
+  button {
+    display: block; width: 100%; margin-bottom: 6px; padding: 8px 10px;
+    text-align: left; background: #222736; color: var(--texto);
+    border: 1px solid var(--borda); border-radius: 6px; cursor: pointer;
+    font: inherit; font-size: 13px;
+  }
+  button:hover { border-color: var(--acento); }
+  button:active { transform: translateY(1px); }
+  button .ordem {
+    display: inline-block; width: 18px; color: var(--fraco); font-family: var(--mono);
+  }
+  .parceiro button { border-left: 3px solid var(--alerta); }
+  .sabotagem { border-color: #4a2530; background: #1d1418; }
+  .sabotagem > h2 { color: var(--perigo); }
+  .sabotagem button { border-left: 3px solid var(--perigo); }
+
+  .marco {
+    margin: 10px 0 6px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--alerta); border-top: 1px dashed var(--borda);
+    padding-top: 10px;
+  }
+
+  .blocos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (max-width: 700px) { .blocos { grid-template-columns: 1fr; } }
+  .bloco h3 {
+    margin: 0 0 6px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--fraco);
+  }
+  .bloco ul { margin: 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 12px; }
+  .bloco li {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 2px 0; border-bottom: 1px solid #20242f;
+  }
+  .bloco li span:last-child { color: var(--fraco); text-align: right; }
+  .vazio { color: var(--fraco); font-style: italic; font-size: 12px; font-family: inherit; }
+
+  .PENDENTE, .ENVIADO_PARCEIRO, .SOLICITADO, .MONTADO { color: var(--alerta); }
+  .PUBLICADO, .PAGO, .PAGA, .FECHADO, .ENVIADO { color: var(--ok); }
+  .SEM_RETORNO, .ERRO { color: var(--perigo); }
+
+  #log {
+    height: calc(100vh - 130px); overflow-y: auto; margin: 0;
+    font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  }
+  #log div { padding: 3px 0; border-bottom: 1px solid #20242f; }
+  #log .hora { color: var(--fraco); }
+  #log .rotulo { color: var(--acento); }
+  #log .falhou .rotulo { color: var(--perigo); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mini-outbox-cobranca</h1>
+  <p>cada botão é uma execução do job que, em produção, o EventBridge dispararia por horário</p>
+</header>
+
+<main>
+
+  <div>
+    <section>
+      <h2>Passos do ciclo</h2>
+      <p class="nota">Na ordem do fluxo. Cada chamada tem efeito.</p>
+      <button data-post="/faturas?quantidade=4"><span class="ordem">1</span> criar faturas</button>
+      <button data-post="/ciclo/montar?ciclo=C-1"><span class="ordem">2</span> montar ciclo</button>
+      <button data-post="/ciclo/gerar-remessa?ciclo=C-1"><span class="ordem">3</span> gerar remessa <small>→ S3</small></button>
+      <button data-post="/ciclo/enviar?ciclo=C-1"><span class="ordem">4</span> enviar <small>→ SFTP</small></button>
+
+      <p class="marco">o parceiro responde</p>
+      <div class="parceiro">
+        <button data-post="/parceiro/processar?resultado=PAGO,NAO_PAGO,PAGO"><span class="ordem">5</span> parceiro processa</button>
+      </div>
+
+      <p class="marco">de volta ao nosso lado</p>
+      <button data-post="/ciclo/coletar"><span class="ordem">6</span> coletar retorno</button>
+      <button data-post="/ciclo/fechar?ciclo=C-1"><span class="ordem">7</span> fechar ciclo</button>
+      <button data-post="/outbox/publicar"><span class="ordem">8</span> publicar outbox <small>→ SQS</small></button>
+    </section>
+
+    <section class="sabotagem" style="margin-top:16px">
+      <h2>Provocar falha</h2>
+      <p class="nota">
+        Os quatro de cima são o parceiro se comportando mal — é o ambiente.
+        Os dois de baixo matam o <em>nosso</em> processo numa janela específica:
+        armam agora, quebram no passo seguinte.
+      </p>
+      <button data-post="/parceiro/processar?particionar=3">retorno particionado em 3</button>
+      <button data-post="/parceiro/processar?atrasar=true">retorno pela metade</button>
+      <button data-post="/parceiro/reenviar-retorno">reenviar o mesmo arquivo</button>
+      <button data-post="/parceiro/retorno-truncado">trailer que não fecha</button>
+      <button data-post="/parceiro/silencio">silêncio (nenhum retorno)</button>
+      <button data-post="/falha/crash-envio">armar crash: put → COMMIT</button>
+      <button data-post="/falha/crash-relay">armar crash: send → UPDATE</button>
+    </section>
+  </div>
+
+  <section>
+    <h2>Estado do mundo</h2>
+    <p class="nota">Cinco fontes, relidas a cada 2s. <span id="pulso"></span></p>
+    <div class="blocos">
+      <div class="bloco"><h3>tentativas (banco)</h3><ul id="tentativas"></ul></div>
+      <div class="bloco"><h3>ciclos (banco)</h3><ul id="ciclos"></ul></div>
+      <div class="bloco"><h3>outbox (banco)</h3><ul id="outbox"></ul></div>
+      <div class="bloco"><h3>fila (SQS)</h3><ul id="fila"></ul></div>
+      <div class="bloco"><h3>parceiro (SFTP)</h3><ul id="parceiro"></ul></div>
+      <div class="bloco"><h3>artefatos (S3)</h3><ul id="artefatos"></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Log de eventos</h2>
+    <p class="nota">Append-only: o estado mostra o agora, o log mostra a sequência.</p>
+    <div id="log"></div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var log = document.getElementById("log");
+
+  function agora() {
+    return new Date().toTimeString().slice(0, 8);
+  }
+
+  function registrar(rotulo, texto, falhou) {
+    var linha = document.createElement("div");
+    if (falhou) { linha.className = "falhou"; }
+    var hora = document.createElement("span");
+    hora.className = "hora";
+    hora.textContent = agora() + "  ";
+    var tag = document.createElement("span");
+    tag.className = "rotulo";
+    tag.textContent = rotulo + "  ";
+    linha.appendChild(hora);
+    linha.appendChild(tag);
+    linha.appendChild(document.createTextNode(texto));
+    log.insertBefore(linha, log.firstChild);
+  }
+
+  // A tela não deduz nada: imprime o corpo que o endpoint devolveu.
+  document.querySelectorAll("button[data-post]").forEach(function (botao) {
+    botao.addEventListener("click", function () {
+      var rota = botao.getAttribute("data-post");
+      registrar("POST", rota + " …");
+      fetch(rota, { method: "POST" })
+        .then(function (resposta) {
+          return resposta.text().then(function (corpo) {
+            registrar(resposta.status + " " + rota, corpo, !resposta.ok);
+            atualizar();
+          });
+        })
+        .catch(function (erro) {
+          registrar("ERRO " + rota, String(erro), true);
+        });
+    });
+  });
+
+  function itens(alvo, linhas) {
+    var ul = document.getElementById(alvo);
+    ul.textContent = "";
+    if (!linhas.length) {
+      var vazio = document.createElement("li");
+      vazio.className = "vazio";
+      vazio.textContent = "vazio";
+      ul.appendChild(vazio);
+      return;
+    }
+    linhas.forEach(function (par) {
+      var li = document.createElement("li");
+      var esquerda = document.createElement("span");
+      esquerda.textContent = par[0];
+      var direita = document.createElement("span");
+      direita.textContent = par[1];
+      if (par[2]) { direita.className = par[2]; }
+      li.appendChild(esquerda);
+      li.appendChild(direita);
+      ul.appendChild(li);
+    });
+  }
+
+  function nomeCurto(caminho) {
+    return caminho.split("/").pop();
+  }
+
+  function pintar(estado) {
+    itens("tentativas", Object.keys(estado.tentativas).map(function (status) {
+      return [status, String(estado.tentativas[status]), status];
+    }));
+
+    itens("ciclos", estado.ciclos.map(function (ciclo) {
+      return [ciclo.id + " · " + ciclo.banco + " · " + ciclo.dataRef, ciclo.status, ciclo.status];
+    }));
+
+    itens("outbox", estado.outbox.map(function (linha) {
+      return [linha.faturaId, linha.status, linha.status];
+    }));
+
+    // A duplicata do crash-relay aparece aqui: a MESMA chave, duas vezes.
+    var fila = estado.fila.chavesDedup.map(function (chave) {
+      return ["chaveDedup", chave];
+    });
+    fila.unshift(["mensagens (aprox.)", String(estado.fila.mensagens)]);
+    itens("fila", fila);
+
+    var parceiro = [];
+    estado.parceiro.remessa.forEach(function (caminho) {
+      parceiro.push([nomeCurto(caminho), "remessa"]);
+    });
+    estado.parceiro.retorno.forEach(function (caminho) {
+      parceiro.push([nomeCurto(caminho), "retorno"]);
+    });
+    itens("parceiro", parceiro);
+
+    itens("artefatos", estado.artefatos.map(function (objeto) {
+      return [objeto.chave, objeto.bytes + " B"];
+    }));
+  }
+
+  var pulso = document.getElementById("pulso");
+
+  function atualizar() {
+    return fetch("/estado")
+      .then(function (resposta) { return resposta.json(); })
+      .then(function (estado) {
+        pintar(estado);
+        pulso.textContent = "última leitura " + agora();
+      })
+      .catch(function (erro) {
+        pulso.textContent = "sem resposta de /estado — o Compose está no ar?";
+      });
+  }
+
+  registrar("painel", "pronto. o passo 1 abre as faturas do dia.");
+  atualizar();
+  setInterval(atualizar, 2000);
+}());
+</script>
+
+</body>
+</html>

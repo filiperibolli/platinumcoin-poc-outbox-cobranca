@@ -200,7 +200,12 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
 
         assertEquals(3, estado.em("tentativas").size());
         assertEquals(1, estado.em("tentativas").get("SEM_RETORNO").asInt());
-        assertEquals(1, estado.em("outbox").get("PUBLICADO").asInt());
+
+        // O outbox vem como linhas, e não como contagem: qual fatura está em
+        // qual status é o que a janela do relay se enxerga — ver EstadoDoMundo.
+        assertEquals(1, estado.em("outbox").size());
+        assertEquals(PAGA, estado.em("outbox").get(0).get("faturaId").asText());
+        assertEquals("PUBLICADO", estado.em("outbox").get(0).get("status").asText());
 
         assertTrue(textos(estado.em("parceiro").get("remessa"))
                         .contains(DIRETORIO_REMESSA + "/341-20260901-C-HTTP.rem"),
@@ -209,14 +214,19 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
                         .contains(DIRETORIO_RETORNO + "/" + RetornoDoParceiro.nome(ciclo())),
                 "o retorno recebido precisa aparecer no diretório do parceiro: " + estado.corpo());
 
-        List<String> artefatos = textos(estado.em("artefatos"));
+        List<String> artefatos = campos(estado.em("artefatos"), "chave");
         assertTrue(artefatos.contains("remessa/341/20260901/C-HTTP.rem"), "artefatos: " + artefatos);
         assertTrue(artefatos.contains(
                         "retorno/341/20260901/" + RetornoDoParceiro.nome(ciclo())),
                 "o retorno também é arquivado, e antes de ser validado: " + artefatos);
+        estado.em("artefatos").forEach(objeto -> assertTrue(objeto.get("bytes").asLong() > 0,
+                "objeto vazio no bucket: " + objeto));
 
-        assertTrue(estado.inteiro("mensagensNaFila") >= 1,
+        assertTrue(estado.em("fila").get("mensagens").asInt() >= 1,
                 "a fila precisa mostrar o lançamento publicado: " + estado.corpo());
+        // A espiada não consome: a chave está lá, e o teste seguinte ainda drena.
+        assertTrue(textos(estado.em("fila").get("chavesDedup")).contains(PAGA),
+                "a fila precisa mostrar a chaveDedup do lançamento: " + estado.corpo());
     }
 
     @Test
@@ -246,7 +256,7 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
      */
     private static ClienteHttp.Resposta estadoComAFilaVisivel() {
         ClienteHttp.Resposta estado = cliente.get("/estado");
-        for (int espera = 0; espera < 20 && estado.inteiro("mensagensNaFila") < 1; espera++) {
+        for (int espera = 0; espera < 20 && estado.em("fila").get("mensagens").asInt() < 1; espera++) {
             dormir();
             estado = cliente.get("/estado");
         }
@@ -266,6 +276,13 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
     private static List<String> textos(JsonNode lista) {
         List<String> valores = new ArrayList<>();
         lista.forEach(item -> valores.add(item.asText()));
+        return List.copyOf(valores);
+    }
+
+    /** Um campo de cada objeto de um array JSON — os artefatos trazem chave e tamanho. */
+    private static List<String> campos(JsonNode lista, String campo) {
+        List<String> valores = new ArrayList<>();
+        lista.forEach(item -> valores.add(item.get(campo).asText()));
         return List.copyOf(valores);
     }
 

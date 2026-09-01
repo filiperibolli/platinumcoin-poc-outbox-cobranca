@@ -252,8 +252,19 @@ class FalhasProvocadasTest extends AmbienteDeTeste {
         return contagens("tentativas");
     }
 
+    /**
+     * As linhas do outbox agrupadas por status.
+     *
+     * <p>O {@code /estado} devolve as <b>linhas</b>, e não a contagem: do
+     * outbox há no máximo uma por fatura, e qual delas está pendente é a
+     * informação — ver {@code EstadoDoMundo}. Quem quer só a distribuição,
+     * como estes testes, agrupa aqui.
+     */
     private static Map<String, Integer> outbox() {
-        return contagens("outbox");
+        Map<String, Integer> porStatus = new LinkedHashMap<>();
+        cliente.get("/estado").em("outbox").forEach(
+                linha -> porStatus.merge(linha.get("status").asText(), 1, Integer::sum));
+        return porStatus;
     }
 
     private static Map<String, Integer> contagens(String bloco) {

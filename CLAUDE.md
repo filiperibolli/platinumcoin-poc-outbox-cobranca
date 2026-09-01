@@ -1,13 +1,61 @@
 # CLAUDE.md — mini-outbox-cobranca
 
+## O propósito, acima de qualquer outra regra deste arquivo
+
+Este projeto existe para ser **a pergunta de um system design e a sua solução.**
+O objetivo é descrever um problema de system design e resolvê-lo em código.
+
+Disso decorre a única prioridade que vence as outras: **o `README.md` é o
+entregável principal.** Ele precisa conter o problema e a solução por escrito,
+com **teste de mesa** — o ciclo percorrido à mão, com o estado depois de cada
+passo — e o **desenho em Mermaid**. O código é a prova de que o documento é
+verdadeiro, não o contrário.
+
+Consequências práticas, quando houver conflito com o resto deste arquivo:
+
+1. **Nenhuma mudança de código está pronta enquanto o README ainda descrever o
+   comportamento antigo.** Um teste verde com README desatualizado é um step
+   incompleto.
+2. **Toda afirmação do README precisa ser conferível.** Bytes, `sha256`, SQL e
+   corpos de resposta saem do código ou de uma execução real — nunca de memória.
+   Se um número aparece no README, ele foi calculado ou observado.
+3. **A pergunta e as quatro dificuldades são a espinha do documento.** Um
+   mecanismo que não puder ser ligado de volta a uma delas está sobrando; uma
+   dificuldade sem mecanismo é um buraco.
+
+## A pergunta
+
+> Como fechar um ciclo diário de cobrança contra um parceiro que só fala por
+> arquivo, não avisa quando responde, às vezes responde pela metade, às vezes
+> reenvia o mesmo arquivo, e às vezes não responde — garantindo que cada fatura
+> paga gere exatamente um lançamento no razão contábil?
+
+### As quatro dificuldades que ela esconde
+
+1. **Duas escritas, dois sistemas, nenhuma transação — duas vezes.** Na montagem
+   (Postgres + artefato no S3) e na publicação (Postgres + fila). Qualquer ordem
+   tem uma janela de morte que produz perda ou duplicidade. Resposta: uma escrita
+   transacional que decide, e todo o resto vira trabalho derivado do commitado.
+2. **Não existe callback.** Força varredura periódica, e duas decisões que nada
+   mais no sistema exige: **quiescência** (parou de crescer) e **trailer**
+   (a contagem fecha). Sem elas, processa-se arquivo pela metade.
+3. **O mesmo retorno chega de várias formas.** Reenvio idêntico, partição com
+   sobreposição, linha duplicada, reprocessamento manual. Quatro problemas, uma
+   solução: `UPDATE ... WHERE status = 'ENVIADO_PARCEIRO'`. A idempotência não
+   vem de tabela de dedup nem de hash — vem de a transição ser condicional.
+4. **O silêncio não é uma resposta.** Ausência vira `SEM_RETORNO`, nunca
+   `NAO_PAGO`: marcar não-pago dispararia notificação ao cliente com base num
+   fato que ninguém afirmou.
+
+Os mecanismos são de **duas famílias**, e misturá-las esconde o desenho. As três
+primeiras — escrita transacional, trabalho derivado, transição condicional —
+garantem **correção sob falha**. Quiescência, trailer e `SEM_RETORNO` garantem
+**honestidade**: que o sistema não afirme o que ninguém disse.
+
 ## O que este projeto é
 
-Um mini-projeto que prova **um único conceito**: como garantir que um evento
-financeiro seja publicado em uma fila externa **exatamente uma vez em relação à
-decisão de negócio**, quando a fila **não participa** da transação do banco.
-
-Não é um framework, não é um produto, não é uma referência de arquitetura
-completa. É uma prova de conceito com testes que demonstram os trade-offs.
+Uma prova de conceito com testes que demonstram os trade-offs. Não é um
+framework, não é um produto, não é uma referência de arquitetura completa.
 
 ## Regras não-negociáveis
 
@@ -43,6 +91,10 @@ completa. É uma prova de conceito com testes que demonstram os trade-offs.
    clareza da fronteira e nunca os testes de falha.
 9. **Só `PAGO` gera lançamento contábil.** `NAO_PAGO`, `ERRO` e `SEM_RETORNO`
    nunca. A regra mora em `TentativaDebito.Status.geraLancamentoContabil()`.
+10. **A `Fatura` para em `PAGA`.** Quem responde "o lançamento já saiu?" é o
+    `outbox`, que tem `UNIQUE (fatura_id)`. Um estado `LANCADA` na fatura seria
+    uma segunda cópia do mesmo fato — o dual write do ADR-0001 em escala menor —
+    e exigiria um `UPDATE` depois do `send`, dentro da janela do relay.
 
 ## Ampliação de escopo (steps 07–12)
 
@@ -70,17 +122,23 @@ invariantes do `PLAN.md` continuam sendo a razão de o projeto existir.
 - Records para modelo de domínio; enums aninhados no record a que pertencem.
 - SQL escrito à mão com JDBC puro. Sem ORM.
 
-## Workflow (um step por sessão)
+## Workflow
 
-1. Ler `PLAN.md` e achar o primeiro step **não marcado**.
-2. Ler `docs/steps/step-NN.md`.
-3. Escrever o teste **antes ou junto** da implementação.
-4. Implementar.
-5. Rodar `mvn test` e conferir a **Definition of Done** do step.
-6. Marcar o step no `PLAN.md`, atualizar o `CHANGELOG.md` (com a linha de
-   métricas AI).
-7. Commit convencional: `feat(outbox): <o que> (step NN)`.
-8. **PARAR.** Não emendar o step seguinte.
+**Os doze steps estão escritos.** O `PLAN.md` registra o que cada um entregou;
+não há step pendente. O que vier agora é manutenção ou um step novo, e os dois
+seguem o mesmo ciclo:
+
+1. Escrever o teste **antes ou junto** da implementação.
+2. Implementar.
+3. Rodar `mvn test`.
+4. **Atualizar o `README.md`** — ver "O propósito" no topo deste arquivo. Uma
+   mudança de comportamento com README velho é trabalho pela metade, e toda
+   afirmação nova precisa ser conferida contra o código ou contra uma execução,
+   nunca escrita de memória.
+5. Atualizar o `CHANGELOG.md` (com a linha de métricas AI) e, se for um step
+   novo, marcá-lo no `PLAN.md`.
+6. Commit convencional: `feat(outbox): <o que>`.
+7. **PARAR.** Não emendar o próximo assunto.
 
 ## Ambiente
 

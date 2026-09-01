@@ -57,6 +57,36 @@ final class ClienteHttp {
         return enviar(HttpRequest.newBuilder(URI.create(base + caminho)).GET());
     }
 
+    /** Uma resposta que não é JSON — o painel, servido como arquivo estático. */
+    record Pagina(int status, String tipo, String corpo) {
+    }
+
+    /**
+     * Busca uma página como um navegador a buscaria.
+     *
+     * <p>O {@code Accept: text/html} não é decoração: a página de boas-vindas
+     * do Spring só responde a quem pede HTML, e um pedido com
+     * {@code Accept: application/json} — o padrão dos outros métodos daqui —
+     * recebe 404 do mesmo servidor que serve o painel a um navegador.
+     */
+    Pagina pagina(String caminho) {
+        try {
+            HttpResponse<String> resposta = http.send(
+                    HttpRequest.newBuilder(URI.create(base + caminho))
+                            .header("Accept", "text/html")
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return new Pagina(resposta.statusCode(),
+                    resposta.headers().firstValue("Content-Type").orElse(""),
+                    resposta.body());
+        } catch (IOException e) {
+            throw new IllegalStateException("falha ao buscar a página " + caminho, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("busca da página " + caminho + " interrompida", e);
+        }
+    }
+
     private Resposta enviar(HttpRequest.Builder pedido) {
         try {
             HttpResponse<String> resposta = http.send(
