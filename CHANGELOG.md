@@ -3,6 +3,111 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [não versionado] — 2026-09-01 — A aplicação sobe no Compose, e o ciclo aparece no log
+
+Só faltava a aplicação para o `docker compose logs` mostrar o ciclo inteiro num
+lugar só. Nenhuma linha de `domain/`, `infra/` ou `simulador/` mudou: o
+`Ambiente` já lia `DB_URL`, `SQS_ENDPOINT`, `S3_ENDPOINT`, `SFTP_HOST` e
+`SFTP_PORTA`, e a única diferença de dentro da rede do Compose é que o vizinho
+atende pelo nome do serviço em vez de por `localhost`.
+
+### Adicionado
+
+- `infra/Dockerfile`: build em duas etapas (`maven:3.9-eclipse-temurin-21` →
+  `eclipse-temurin:21-jre`). O `pom.xml` copiado antes do `src` e um cache
+  mount em `/root/.m2` para que uma mudança de código não volte à rede.
+- `.dockerignore`, para manter `target/` e `.git/` fora do contexto.
+- Serviço `app` no `infra/docker-compose.yml`, **atrás do perfil `app`**:
+  `up -d` sem perfil continua subindo só o ambiente. Sem isso, o Compose e o
+  `mvn spring-boot:run` disputariam a porta 8080 — as duas formas continuam
+  valendo, e é a de fora do container que se usa para mexer no código.
+- `README.md`, seção "Ver acontecendo": os dois comandos, por que existe o
+  perfil e por que o `repackage` mora no Dockerfile.
+
+### Decidido
+
+- **`spring-boot:repackage` chamado no Dockerfile, não ligado ao `package` no
+  `pom.xml`.** O comentário do pom diz que o artefato do projeto é um jar comum,
+  e isso continua verdade: quem precisa do jar executável é a imagem. A
+  alternativa — uma execução do plugin no pom — mudaria o que `mvn package`
+  produz para todo mundo, por uma necessidade que é só do container.
+- **Testes pulados no build da imagem.** A suíte sobe os próprios containers via
+  Testcontainers e não há daemon Docker dentro do `docker build`. `mvn test`
+  continua sendo o lugar dela.
+
+### Adicionado — o log
+
+- **`org.slf4j` no domínio**, nos oito use cases, nos pontos de decisão. É a
+  regra que mudou: `FundacaoTest.dominioIsolado` só admitia `java.*` e o próprio
+  domínio, e passou a admitir `org.slf4j.` também. A regra 3 do `CLAUDE.md`
+  nomeia Spring, AWS SDK e biblioteca SSH — **o teste era mais estrito que a
+  regra escrita**, e o que se afrouxou foi o teste até ela, não ela. O motivo
+  está no [ADR-0005](docs/adr/0005-log-no-dominio-nos-pontos-de-decisao.md): o
+  adaptador sabe que um `UPDATE` afetou zero linhas, e só o use case sabe que
+  isso significa "já aplicado, e não é erro".
+- **`EfeitoNoLog`**, um `ResponseBodyAdvice` em `api/http`: a mesma resposta que
+  volta ao chamador, também no log. Um advice e não oito linhas em oito
+  controllers. **Fora `GET /estado`** — o painel o relê a cada 2s, e ele afogaria
+  a sequência.
+- **Linhas nos adaptadores**: `[artefato]` (S3), `[parceiro]` (SFTP, incluindo os
+  dois `stat` que **são** a quiescência) e `[sqs]`. E `[crash]` nos dois
+  decoradores de falha, no instante exato de cada janela.
+- `Main.main` silencia `com.platinumcoin.ciclo` antes de rodar: o cenário do
+  console **é** a saída do programa, e as mesmas frases interleavadas contariam
+  a história duas vezes.
+- `showShortLogName=true` no `simplelogger.properties`, para a mensagem caber na
+  tela ao lado do nome da classe.
+
+### Adicionado — a documentação
+
+- [ADR-0004](docs/adr/0004-aplicacao-em-container-atras-de-um-perfil.md) e
+  [ADR-0005](docs/adr/0005-log-no-dominio-nos-pontos-de-decisao.md).
+- ADR-0001, 0002 e 0003 ganharam um bloco **"Onde isto é observável"** cada um,
+  ligando a decisão às linhas de log que a mostram acontecendo. As duas janelas
+  deixaram de ser dedutíveis só do teste.
+- README: seção **"Testar, do terminal, contra `localhost:8080`"** — os oito
+  `curl` em sequência, o trecho de log real que eles produzem, e os dois
+  roteiros de falha (retorno repetido e janela B), com a saída observada.
+- README: duas linhas novas na tabela "As decisões, com o preço", e a lista de
+  arquivos atualizada.
+
+### Verificado
+
+Contra os containers, com a aplicação em `ciclo-app` — os oito passos, na ordem
+do painel:
+
+```
+gerar-remessa  {"chave":"remessa/341/20260901/C-1.rem","sha256":"303d3071…","detalhes":4,"bytes":233}
+coletar        {"vistos":1,"aplicadas":4,"arquivos":[{"nome":"341-20260901-C-1.ret","desfecho":"APLICADO",…}]}
+publicar       {"publicados":2,"chavesDedup":["F-20260901-1","F-20260901-4"]}
+```
+
+`tentativas {PAGO 2, NAO_PAGO 1, ERRO 1}` e **duas** linhas no outbox: os quatro
+sistemas externos respondendo de dentro da rede do Compose, inclusive o SQS —
+a url que o LocalStack devolve ao `getQueueUrl` era o risco, e o container a
+resolve.
+
+A janela B, provocada de dentro do container, é a mesma:
+
+```
+crash-relay → publicar   409   fila 3 mensagens, F-20260902-1 já enviada e ainda PENDENTE
+publicar de novo         200   fila 5 mensagens, F-20260902-1 duas vezes
+```
+
+O log de um ciclo inteiro foi lido linha a linha contra o que cada uma afirma —
+os dois `stat` idênticos da quiescência, a ausência de `[sqs]` entre o
+`[outbox] + PENDENTE` e o `COMMIT`, as quatro linhas `(0 linhas afetadas — já
+aplicado, ignorado)` de um retorno reprocessado, e o `[crash]` logo depois do
+`[fila] … a linha ainda diz PENDENTE`. Os trechos do README saíram desse log,
+não de memória.
+
+`mvn test` → **24 classes, 83 testes, 0 falhas**, com a lista branca do domínio
+já afrouxada.
+
+AI: est 1h30 / actual 55min / ~90% generated / 2 issues caught in review (jar sem
+manifesto na primeira imagem — o `repackage` não estava ligado; e o log de
+`atributos` chamando `mtime()` num record cujo componente é `modificadoEm`)
+
 ## [não versionado] — 2026-09-01 — O projeto deixa de se chamar outbox
 
 `mini-outbox-cobranca` → **`ciclo-de-cobranca`**, e o pacote

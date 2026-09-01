@@ -8,6 +8,9 @@ import com.platinumcoin.ciclo.domain.port.RepositorioFatura;
 import com.platinumcoin.ciclo.domain.port.RepositorioTentativa;
 import com.platinumcoin.ciclo.domain.port.Transacao;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Gera a remessa de um ciclo já montado e a deixa gravada como artefato
  * durável.
@@ -40,6 +43,8 @@ import com.platinumcoin.ciclo.domain.port.Transacao;
  */
 public final class GerarRemessaUseCase {
 
+    private static final Logger log = LoggerFactory.getLogger(GerarRemessaUseCase.class);
+
     private final Transacao.Fabrica transacoes;
     private final RepositorioCiclo ciclos;
     private final RepositorioTentativa tentativas;
@@ -71,6 +76,9 @@ public final class GerarRemessaUseCase {
         try (Transacao tx = transacoes.abrir()) {
             ciclos.registrarRemessa(tx, cicloId, remessa.chave(), remessa.sha256());
             tx.commit();
+            log.info("[remessa] {} {} detalhes, {} bytes, sha256={}",
+                    cicloId, remessa.quantidadeDeDetalhes(), remessa.bytes().length,
+                    remessa.sha256());
         }
         return remessa;
     }

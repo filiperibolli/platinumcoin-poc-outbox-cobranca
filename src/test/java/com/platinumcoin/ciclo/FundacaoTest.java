@@ -178,8 +178,15 @@ class FundacaoTest extends AmbienteDeTeste {
                     if (!linha.startsWith("import ")) {
                         continue;
                     }
+                    // org.slf4j entrou junto com o container: o mecanismo precisa
+                    // poder ser VISTO acontecendo, e quem sabe o que aconteceu é o
+                    // ponto de decisão, não o adaptador. Uma fachada de log própria
+                    // em domain/port seria uma indireção para não escrever seis
+                    // letras — e slf4j é uma API sem implementação, que é a razão
+                    // de a proibição existir para as outras três.
                     boolean permitido = linha.startsWith("import java.")
-                            || linha.startsWith("import com.platinumcoin.ciclo.domain.");
+                            || linha.startsWith("import com.platinumcoin.ciclo.domain.")
+                            || linha.startsWith("import org.slf4j.");
                     if (!permitido) {
                         proibidos.add(arquivo.getFileName() + ": " + linha.trim());
                     }
@@ -188,9 +195,11 @@ class FundacaoTest extends AmbienteDeTeste {
         }
 
         assertEquals(List.of(), proibidos,
-                "api → domain ← infra: o domínio só pode importar java.* e ele mesmo."
-                        + " O Spring entrou no step-10 por um motivo único — expor HTTP —"
-                        + " e a lista branca abaixo é o que garante que ele parou em api/http"
-                        + " e na fiação");
+                "api → domain ← infra: o domínio só pode importar java.*, ele mesmo"
+                        + " e a API de log. O Spring entrou no step-10 por um motivo único —"
+                        + " expor HTTP — e a lista branca acima é o que garante que ele parou"
+                        + " em api/http e na fiação. Framework, AWS SDK e biblioteca SSH"
+                        + " continuam fora: são implementações, e uma delas aqui dentro"
+                        + " amarraria o domínio a um mundo externo");
     }
 }

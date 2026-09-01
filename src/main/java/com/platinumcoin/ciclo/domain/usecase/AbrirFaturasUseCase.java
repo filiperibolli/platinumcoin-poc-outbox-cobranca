@@ -11,6 +11,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Abre as faturas de partida de um recorte, cada uma com uma tentativa
  * {@code ABERTO} esperando entrar num ciclo.
@@ -26,6 +29,8 @@ import java.util.List;
  * <b>é</b> uma escrita só continua sendo a montagem do ciclo.
  */
 public final class AbrirFaturasUseCase {
+
+    private static final Logger log = LoggerFactory.getLogger(AbrirFaturasUseCase.class);
 
     /**
      * O teto de faturas por chamada.
@@ -88,6 +93,8 @@ public final class AbrirFaturasUseCase {
             abertas.add(fatura);
             esperando.add(tentativa);
         }
+        log.info("[fatura]  {} faturas ABERTA, {} tentativas ABERTO (banco {}, {})",
+                abertas.size(), esperando.size(), banco, dataRef);
         return new Resultado(abertas, esperando);
     }
 }

@@ -7,6 +7,8 @@ import com.platinumcoin.ciclo.domain.port.RepositorioFatura;
 import com.platinumcoin.ciclo.domain.port.RepositorioOutbox;
 import com.platinumcoin.ciclo.domain.port.RepositorioTentativa;
 import com.platinumcoin.ciclo.domain.port.Transacao;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Aplica a um débito o desfecho que o parceiro informou — e, quando o desfecho
@@ -34,6 +36,8 @@ import com.platinumcoin.ciclo.domain.port.Transacao;
  * passaram viram zero linhas afetadas na segunda vez.
  */
 public final class AplicarRetornoUseCase {
+
+    private static final Logger log = LoggerFactory.getLogger(AplicarRetornoUseCase.class);
 
     private final Transacao.Fabrica transacoes;
     private final RepositorioTentativa tentativas;
@@ -77,9 +81,16 @@ public final class AplicarRetornoUseCase {
         TentativaDebito.exigirMotivoCoerente("retorno da tentativa " + tentativaId, resultado, motivo);
 
         try (Transacao tx = transacoes.abrir()) {
-            if (tentativas.registrarResultado(tx, tentativaId, resultado, motivo) == 0) {
+            int afetadas = tentativas.registrarResultado(tx, tentativaId, resultado, motivo);
+            if (afetadas == 0) {
+                // Zero linhas é o caso normal do arquivo reprocessado, e o log
+                // diz isso: quem já tem desfecho não recebe outro.
+                log.info("[retorno] {} → {}  (0 linhas afetadas — já aplicado, ignorado)",
+                        tentativaId, resultado);
                 return Resultado.IGNORADO;
             }
+            log.info("[retorno] {} ENVIADO_PARCEIRO → {}{}  ({} linha afetada)",
+                    tentativaId, resultado, motivo == null ? "" : " (" + motivo + ")", afetadas);
             Resultado desfecho = resultado.geraLancamentoContabil()
                     ? decidirLancamento(tx, tentativaId)
                     : Resultado.APLICADO;
@@ -103,9 +114,11 @@ public final class AplicarRetornoUseCase {
                 () -> new IllegalStateException("tentativa sem fatura: " + tentativaId));
 
         if (faturas.marcarPaga(tx, fatura.id()) == 0) {
+            log.info("[fatura]  {} já estava PAGA — nenhuma segunda linha no outbox", fatura.id());
             return Resultado.APLICADO;
         }
         outbox.inserir(tx, new LancamentoContabil(fatura.id(), fatura.valor()));
+        log.info("[outbox]  {} + PENDENTE — na MESMA transação da fatura", fatura.id());
         return Resultado.APLICADO_COM_LANCAMENTO;
     }
 }

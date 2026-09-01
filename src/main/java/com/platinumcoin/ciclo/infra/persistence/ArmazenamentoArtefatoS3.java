@@ -3,6 +3,8 @@ package com.platinumcoin.ciclo.infra.persistence;
 import com.platinumcoin.ciclo.domain.exception.FalhaDePersistencia;
 import com.platinumcoin.ciclo.domain.model.ChaveArtefato;
 import com.platinumcoin.ciclo.domain.port.ArmazenamentoArtefato;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -23,6 +25,8 @@ import java.io.IOException;
  */
 public final class ArmazenamentoArtefatoS3 implements ArmazenamentoArtefato {
 
+    private static final Logger log = LoggerFactory.getLogger(ArmazenamentoArtefatoS3.class);
+
     private final S3Client s3;
     private final String bucket;
 
@@ -36,6 +40,9 @@ public final class ArmazenamentoArtefatoS3 implements ArmazenamentoArtefato {
         try {
             s3.putObject(pedido -> pedido.bucket(bucket).key(chave.valor()),
                     RequestBody.fromBytes(conteudo));
+            // A chave é determinística: um put repetido sobrescreve os mesmos
+            // bytes, e é isso que a segunda linha idêntica no log mostra.
+            log.info("[artefato] put s3://{}/{} — {} bytes", bucket, chave.valor(), conteudo.length);
         } catch (SdkException e) {
             // Traduz antes de atravessar a porta: o use case não pode depender
             // de um tipo do AWS SDK para saber que a gravação falhou.
@@ -47,7 +54,9 @@ public final class ArmazenamentoArtefatoS3 implements ArmazenamentoArtefato {
     public byte[] get(ChaveArtefato chave) {
         try (ResponseInputStream<GetObjectResponse> objeto =
                      s3.getObject(pedido -> pedido.bucket(bucket).key(chave.valor()))) {
-            return objeto.readAllBytes();
+            byte[] conteudo = objeto.readAllBytes();
+            log.info("[artefato] get s3://{}/{} — {} bytes", bucket, chave.valor(), conteudo.length);
+            return conteudo;
         } catch (NoSuchKeyException e) {
             throw new FalhaDePersistencia("artefato inexistente: " + chave, e);
         } catch (SdkException | IOException e) {

@@ -50,3 +50,32 @@ services:
     command: parceiro:parceiro:::remessa,retorno
     ports:
       - "2222:22"
+
+  # A aplicação. Fica atrás do perfil `app` de propósito: `up -d` sem perfil
+  # sobe só o ambiente, que é o que o `mvn spring-boot:run` do dia a dia
+  # precisa — e as duas formas disputariam a porta 8080 se ambas subissem.
+  # Com o perfil, os logs dos quatro processos saem no mesmo lugar.
+  app:
+    profiles: ["app"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    image: ciclo-de-cobranca:local
+    container_name: ciclo-app
+    environment:
+      # Os mesmos nomes que o Ambiente lê; só os endereços mudam, porque de
+      # dentro da rede do Compose o vizinho é o nome do serviço, não localhost.
+      DB_URL: jdbc:postgresql://postgres:5432/cobranca
+      SQS_ENDPOINT: http://localstack:4566
+      S3_ENDPOINT: http://localstack:4566
+      SFTP_HOST: sftp
+      SFTP_PORTA: "22"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      sftp:
+        condition: service_started

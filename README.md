@@ -637,6 +637,8 @@ Nenhuma decisão de desenho é grátis. A coluna que importa é a terceira.
 | Cada passo é um endpoint, não um cron | `@Scheduled` no próprio serviço | é preciso chamar para acontecer — que é exatamente o ponto: dá para executar o passo quando se quer olhar para ele |
 | Simulador em pacote próprio, enxergando só arquivos | montar o retorno consultando o Postgres | um parser de remessa e uma conexão SSH a mais, escritos do lado do parceiro — em troca de o retorno não ser função do nosso próprio estado |
 | Falhas provocadas como decoradores de porta | um `if (simularCrash)` dentro do use case | dois arquivos e três linhas de fiação — em troca de o código de produção continuar sendo o que se lê |
+| A aplicação no Compose, atrás de um perfil ([ADR-0004](docs/adr/0004-aplicacao-em-container-atras-de-um-perfil.md)) | subir sempre junto com o ambiente | duas formas de rodar para manter — em troca de `up -d` e `mvn spring-boot:run` continuarem valendo sem disputar a porta 8080 |
+| Log no domínio, nos pontos de decisão ([ADR-0005](docs/adr/0005-log-no-dominio-nos-pontos-de-decisao.md)) | logar só em `infra`, com o domínio mudo | uma dependência a mais no domínio (`org.slf4j`, uma API sem implementação) — em troca de "0 linhas afetadas" vir acompanhado do que isso significa |
 
 ### A fronteira de responsabilidade
 
@@ -665,6 +667,27 @@ coisa rodando.
 docker compose -f infra/docker-compose.yml up -d
 mvn spring-boot:run
 ```
+
+Ou, com a aplicação também em container — um `docker compose logs -f` para os
+quatro processos em vez de um terminal para o Maven e outro para o ambiente:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile app up -d --build
+docker compose -f infra/docker-compose.yml logs -f app
+```
+
+**O perfil `app` existe para que `up -d` sem perfil continue subindo só o
+ambiente**, que é o que o `mvn spring-boot:run` do dia a dia precisa: as duas
+formas disputariam a porta 8080 se a aplicação subisse sempre. As duas rodam o
+mesmo processo contra a mesma infra — o que muda são os endereços dos vizinhos,
+`postgres`, `localstack` e `sftp` em vez de `localhost`, e é só isso que o
+serviço `app` configura, pelas variáveis que o `Ambiente` já lia.
+
+A imagem é construída em duas etapas e chama `spring-boot:repackage` no
+Dockerfile em vez de ligar o `repackage` ao `package` no `pom.xml`: quem precisa
+de jar executável é a imagem, e o artefato do projeto continua sendo um jar
+comum. O build pula os testes de propósito — a suíte sobe os próprios
+containers via Testcontainers, e não há daemon Docker dentro do build.
 
 Abra **`localhost:8080`**. Um arquivo HTML, sem build e sem CDN:
 
@@ -747,6 +770,104 @@ motivo intacto — o `UNIQUE (banco, data_ref)` fazendo o seu trabalho, e não u
 mesma razão: os ids das faturas são derivados da data (`F-20260901-1`), então a
 segunda chamada esbarra na chave primária em vez de encher o banco de faturas
 parecidas.
+
+### Testar, do terminal, contra `localhost:8080`
+
+Os oito passos em sequência. É o mesmo que o painel faz nos cliques, e o mesmo
+que `CenarioPontaAPontaTest` verifica — copiar e colar o bloco inteiro fecha um
+ciclo do zero:
+
+```bash
+B=localhost:8080
+curl -sX POST "$B/faturas?quantidade=4&banco=341&data=2026-09-01"
+curl -sX POST "$B/ciclo/montar?ciclo=C-1&banco=341&data=2026-09-01"
+curl -sX POST "$B/ciclo/gerar-remessa?ciclo=C-1"
+curl -sX POST "$B/ciclo/enviar?ciclo=C-1"
+curl -sX POST "$B/parceiro/processar?resultado=PAGO,NAO_PAGO,ERRO"   # ← o parceiro
+curl -sX POST "$B/ciclo/coletar"
+curl -sX POST "$B/ciclo/fechar?ciclo=C-1"
+curl -sX POST "$B/outbox/publicar"
+curl -s       "$B/estado"
+```
+
+Com a aplicação em container ([ADR-0004](docs/adr/0004-aplicacao-em-container-atras-de-um-perfil.md)),
+o interessante não é o que o `curl` devolve — é o que aparece do outro lado:
+
+```bash
+docker compose -f infra/docker-compose.yml logs -f app
+```
+
+Cada passo emite as linhas do **use case** (o que a decisão significa), as do
+**adaptador** (o que atravessou a fronteira) e uma do **efeito** (o que voltou
+ao chamador) — ver [ADR-0005](docs/adr/0005-log-no-dominio-nos-pontos-de-decisao.md).
+Um trecho real, do passo 4 ao 6, com os nomes de thread omitidos:
+
+```
+ArmazenamentoArtefatoS3  [artefato] get s3://cobranca-artefatos/remessa/341/20260901/C-1.rem — 233 bytes
+CanalArquivosSftp        [parceiro] put /remessa/341-20260901-C-1.rem — 233 bytes
+EnviarRemessaUseCase     [envia]   C-1 341-20260901-C-1.rem entregue ao parceiro — 233 bytes, ANTES do COMMIT
+EnviarRemessaUseCase     [envia]   C-1 ENVIADO — 4 tentativas SOLICITADO → ENVIADO_PARCEIRO
+CanalArquivosSftp        [parceiro] ls /retorno — [/retorno/341-20260901-C-1.ret]
+CanalArquivosSftp        [parceiro] stat /retorno/341-20260901-C-1.ret — 221 bytes, modificadoEm 1788267783
+CanalArquivosSftp        [parceiro] stat /retorno/341-20260901-C-1.ret — 221 bytes, modificadoEm 1788267783
+CanalArquivosSftp        [parceiro] get /retorno/341-20260901-C-1.ret — 221 bytes
+AplicarRetornoUseCase    [retorno] F-20260901-1-T1 ENVIADO_PARCEIRO → PAGO  (1 linha afetada)
+AplicarRetornoUseCase    [outbox]  F-20260901-1 + PENDENTE — na MESMA transação da fatura
+AplicarRetornoUseCase    [retorno] F-20260901-2-T1 ENVIADO_PARCEIRO → NAO_PAGO (SALDO_INSUFICIENTE)  (1 linha afetada)
+ColetarRetornoUseCase    [coleta]  341-20260901-C-1.ret APLICADO — 4 linhas, 4 aplicadas, sha256=83e79f0f…
+```
+
+**Os dois `stat` idênticos são a quiescência**, e a linha que não existe entre
+`[outbox] + PENDENTE` e o `COMMIT` é o ADR-0001: nenhum `[sqs]` aparece ali.
+
+#### Testar a dificuldade 3: o mesmo retorno de novo
+
+```bash
+curl -sX POST "$B/parceiro/processar?resultado=PAGO"   # reescreve o retorno do ciclo
+curl -sX POST "$B/ciclo/coletar"
+```
+
+```
+[retorno] F-20260901-2-T1 → PAGO  (0 linhas afetadas — já aplicado, ignorado)
+[coleta]  341-20260901-C-1.ret APLICADO — 4 linhas, 0 aplicadas
+```
+
+Quatro linhas lidas, zero aplicadas, nenhuma linha nova no outbox. **A
+idempotência é a contagem**, e não uma tabela de dedup consultada antes.
+
+Com bytes idênticos aos de um arquivo já aplicado, o atalho do `sha256` age
+antes disso e o arquivo nem é parseado:
+
+```bash
+curl -sX POST "$B/parceiro/reenviar-retorno" && curl -sX POST "$B/ciclo/coletar"
+```
+
+```
+[coleta]  341-20260901-C-1.ret REPETIDO — sha256=aaeebc49… já aplicado, nada a reprocessar
+```
+
+#### Testar a janela B: a duplicata que o consumidor deduplica
+
+```bash
+curl -sX POST "$B/falha/crash-relay"
+curl -sX POST "$B/outbox/publicar"    # 409
+curl -sX POST "$B/outbox/publicar"    # converge
+```
+
+```
+[relay]   2 linha(s) PENDENTE nesta passada
+[fila]    linha 3 enviada (chaveDedup=F-20260902-1) — a linha ainda diz PENDENTE
+[crash]   linha 3 — a mensagem JÁ saiu e o UPDATE não vem (janela B)
+[passo]   POST /outbox/publicar → {"erro":"FalhaDePersistencia","mensagem":"o relay morreu entre o send e o UPDATE"}
+```
+
+A segunda passada republica a mesma `chaveDedup`, e `GET /estado` passa a
+mostrar a mesma chave duas vezes no bloco `fila`. **É a janela inteira em quatro
+linhas** — e ela só existe na *sequência*: no estado final já passou, que é a
+razão de o painel e o log serem duas coisas.
+
+`GET /estado` é o único que **não** aparece no log: o painel o relê a cada 2s, e
+logá-lo afogaria tudo o que está acima.
 
 ### Mexer no ambiente: o parceiro e as duas janelas
 
@@ -930,14 +1051,17 @@ que compreender o mecanismo vale mais que manter o projeto pequeno.
 ## Como o código está organizado
 
 `api → domain ← infra`. O domínio não importa framework nem AWS SDK — e há um
-teste que falha se isso mudar (`FundacaoTest.dominioIsolado`).
+teste que falha se isso mudar (`FundacaoTest.dominioIsolado`). A única exceção
+da lista branca é `org.slf4j`, uma API sem implementação, e o motivo está no
+teste e no [ADR-0005](docs/adr/0005-log-no-dominio-nos-pontos-de-decisao.md).
 
 ```
 docs/brief.md            o enunciado curto: a pergunta, as restrições
                          e as quatro dificuldades, sem a solução
-docs/adr/                as três decisões que sustentam o projeto
+docs/adr/                as cinco decisões que sustentam o projeto
 docs/steps/              o que cada step entrega e sua Definition of Done
 infra/                   docker-compose + scripts de init (schema, fila, bucket)
+                         Dockerfile — a aplicação como container, perfil `app`
 
 src/main/java/com/platinumcoin/ciclo/
   domain/model           Fatura, CicloCobranca, TentativaDebito, Remessa,
@@ -952,6 +1076,7 @@ src/main/java/com/platinumcoin/ciclo/
   domain/exception       FalhaDePersistencia, FalhaDePublicacao
   api                    LinhaRetorno, ArquivoRetorno — o layout posicional
   api/http               um controller por passo; nenhuma regra de negócio
+                         EfeitoNoLog — a mesma resposta, também no log
   api/http/dto           os records de resposta: o efeito, não `200`
   infra/persistence      JDBC puro, uma implementação por porta
   infra/canal            CanalArquivosSftp — SSH de verdade

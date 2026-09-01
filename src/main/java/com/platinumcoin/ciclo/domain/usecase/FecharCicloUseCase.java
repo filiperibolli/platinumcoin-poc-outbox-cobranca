@@ -3,6 +3,9 @@ package com.platinumcoin.ciclo.domain.usecase;
 import com.platinumcoin.ciclo.domain.port.RepositorioCiclo;
 import com.platinumcoin.ciclo.domain.port.Transacao;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Encerra o ciclo depois da janela de retorno: o que continua
  * {@code ENVIADO_PARCEIRO} vira {@code SEM_RETORNO} e o ciclo vira
@@ -26,6 +29,8 @@ import com.platinumcoin.ciclo.domain.port.Transacao;
  */
 public final class FecharCicloUseCase {
 
+    private static final Logger log = LoggerFactory.getLogger(FecharCicloUseCase.class);
+
     private final Transacao.Fabrica transacoes;
     private final RepositorioCiclo ciclos;
 
@@ -45,6 +50,9 @@ public final class FecharCicloUseCase {
         try (Transacao tx = transacoes.abrir()) {
             int semRetorno = ciclos.fechar(tx, cicloId);
             tx.commit();
+            log.info("[fecha]   {} FECHADO — {} tentativa(s) ENVIADO_PARCEIRO → SEM_RETORNO"
+                            + " (silêncio registrado como silêncio, nunca como NAO_PAGO)",
+                    cicloId, semRetorno);
             return semRetorno;
         }
     }

@@ -3,6 +3,8 @@ package com.platinumcoin.ciclo.infra.persistence;
 import com.platinumcoin.ciclo.domain.exception.FalhaDePublicacao;
 import com.platinumcoin.ciclo.domain.model.LancamentoContabil;
 import com.platinumcoin.ciclo.domain.port.PublicadorLancamento;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
@@ -26,6 +28,8 @@ import java.util.Map;
  */
 public final class PublicadorLancamentoSqs implements PublicadorLancamento {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicadorLancamentoSqs.class);
+
     /** O nome do atributo é contrato com o consumidor, tanto quanto o payload. */
     public static final String ATRIBUTO_DEDUP = "chaveDedup";
 
@@ -40,7 +44,7 @@ public final class PublicadorLancamentoSqs implements PublicadorLancamento {
     @Override
     public String publicar(LancamentoContabil lancamento) {
         try {
-            return sqs.sendMessage(mensagem -> mensagem
+            String mensagemId = sqs.sendMessage(mensagem -> mensagem
                             .queueUrl(urlDaFila)
                             .messageBody(Payload.escrever(lancamento))
                             .messageAttributes(Map.of(ATRIBUTO_DEDUP, MessageAttributeValue.builder()
@@ -48,6 +52,9 @@ public final class PublicadorLancamentoSqs implements PublicadorLancamento {
                                     .stringValue(lancamento.chaveDedup())
                                     .build())))
                     .messageId();
+            log.info("[sqs]     send fatura={} chaveDedup={} messageId={}",
+                    lancamento.faturaId(), lancamento.chaveDedup(), mensagemId);
+            return mensagemId;
         } catch (SdkException e) {
             // Traduz antes de atravessar a porta: o relay não pode depender de
             // um tipo do AWS SDK para saber que o envio falhou. E a falha aqui

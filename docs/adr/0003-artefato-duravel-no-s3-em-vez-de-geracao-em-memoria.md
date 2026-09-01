@@ -109,3 +109,10 @@ artefato do sistema sobre o qual alguém vai fazer uma pergunta depois.
   do `COMMIT` da chave) é inofensiva por determinismo, e o teste que a exercita
   existe para mostrar **por que** ela é inofensiva — em contraste com a do
   step-08, que não é.
+
+**Onde isto é observável.** As três linhas de `[artefato] put` de um mesmo ciclo
+trazem a mesma chave e o mesmo número de bytes, quantas vezes se regere: é a
+sobrescrita idêntica da tabela acima, acontecendo. A janela do step-08 aparece
+com `POST /falha/crash-envio` armado, como `[envia] … entregue ao parceiro —
+ANTES do COMMIT` seguido de `[crash]` — ver
+[ADR-0005](0005-log-no-dominio-nos-pontos-de-decisao.md).

@@ -68,3 +68,9 @@ volume crescer.
   `UPDATE` e um `INSERT`.
 - **Não elimina duplicata na fila.** Move o problema para o relay, onde ele é
   tratável — ver [ADR-0002](0002-at-least-once-mais-dedup-em-vez-de-fifo.md).
+
+**Onde isto é observável.** `AplicarRetornoUseCase` emite `[outbox] F-… +
+PENDENTE — na MESMA transação da fatura` no ponto exato do `INSERT`, e nenhuma
+linha de `[sqs]` aparece entre ele e o `COMMIT`: a ausência de uma linha de log
+é a prova de que o efeito externo não está dentro da transação. Ver
+[ADR-0005](0005-log-no-dominio-nos-pontos-de-decisao.md).
