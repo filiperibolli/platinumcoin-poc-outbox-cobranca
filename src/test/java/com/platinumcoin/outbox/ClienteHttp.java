@@ -48,6 +48,33 @@ final class ClienteHttp {
         }
     }
 
+    /**
+     * Uma página, como o navegador a receberia: sem {@code Accept} de JSON e sem
+     * parsear o corpo.
+     *
+     * <p>Existe porque o painel do step-12 não é JSON — e um cliente que
+     * parseasse tudo como JSON não teria como afirmar que o HTML foi servido.
+     */
+    Pagina pagina(String caminho) {
+        try {
+            HttpResponse<String> resposta = http.send(
+                    HttpRequest.newBuilder(URI.create(base + caminho)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return new Pagina(resposta.statusCode(),
+                    resposta.headers().firstValue("Content-Type").orElse(""),
+                    resposta.body());
+        } catch (IOException e) {
+            throw new IllegalStateException("falha ao chamar o servidor", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("chamada ao servidor interrompida", e);
+        }
+    }
+
+    /** O que o navegador recebeu: o código, o tipo do conteúdo e o corpo cru. */
+    record Pagina(int status, String tipo, String corpo) {
+    }
+
     Resposta post(String caminho) {
         return enviar(HttpRequest.newBuilder(URI.create(base + caminho))
                 .POST(HttpRequest.BodyPublishers.noBody()));

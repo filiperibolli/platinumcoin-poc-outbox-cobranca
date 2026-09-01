@@ -202,14 +202,14 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
         assertEquals(1, estado.em("tentativas").get("SEM_RETORNO").asInt());
         assertEquals(1, estado.em("outbox").get("PUBLICADO").asInt());
 
-        assertTrue(textos(estado.em("parceiro").get("remessa"))
+        assertTrue(nomes(estado.em("parceiro").get("remessa"))
                         .contains(DIRETORIO_REMESSA + "/341-20260901-C-HTTP.rem"),
                 "a remessa transmitida precisa aparecer no diretório do parceiro: " + estado.corpo());
-        assertTrue(textos(estado.em("parceiro").get("retorno"))
+        assertTrue(nomes(estado.em("parceiro").get("retorno"))
                         .contains(DIRETORIO_RETORNO + "/" + RetornoDoParceiro.nome(ciclo())),
                 "o retorno recebido precisa aparecer no diretório do parceiro: " + estado.corpo());
 
-        List<String> artefatos = textos(estado.em("artefatos"));
+        List<String> artefatos = nomes(estado.em("artefatos"));
         assertTrue(artefatos.contains("remessa/341/20260901/C-HTTP.rem"), "artefatos: " + artefatos);
         assertTrue(artefatos.contains(
                         "retorno/341/20260901/" + RetornoDoParceiro.nome(ciclo())),
@@ -260,6 +260,13 @@ class EndpointsDevolvemEfeitoTest extends AmbienteDeTeste {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("espera interrompida", e);
         }
+    }
+
+    /** O campo {@code nome} de cada arquivo — no SFTP é o caminho, no S3 é a chave. */
+    private static List<String> nomes(JsonNode arquivos) {
+        List<String> valores = new ArrayList<>();
+        arquivos.forEach(arquivo -> valores.add(arquivo.get("nome").asText()));
+        return List.copyOf(valores);
     }
 
     /** Os itens de um array JSON como texto, na ordem em que a resposta os trouxe. */

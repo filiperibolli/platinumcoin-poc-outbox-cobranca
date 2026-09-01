@@ -3,6 +3,106 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Um step por entrada.
 
+## [step-12] — 2026-08-31 — Painel HTML de observação do ciclo
+
+O último `curl` sai da frente. O ciclo tem cinco passos, cinco fontes de estado
+e oito formas de provocar falha; acompanhar isso por terminal é possível, e é
+exatamente o tipo de atrito que faz alguém parar de olhar. Agora é uma tela: a
+coluna dos passos à esquerda, o estado no meio, o log à direita.
+
+Um arquivo — `src/main/resources/static/index.html` — com HTML, CSS e
+JavaScript inline. Sem build, sem framework, sem CDN. `npm install` para ver um
+mecanismo de backend seria a contradição óbvia; um `<script src>` remoto seria
+pior, porque transformaria um demo local numa coisa que só funciona com
+internet.
+
+### Adicionado
+
+- **`resources/static/index.html`** — três colunas: **operar o ciclo** (um botão
+  por passo, na ordem do fluxo, mais o recorte), **provocar falha** (os cinco
+  comportamentos do parceiro e as duas janelas do nosso lado, em outra caixa e
+  outra cor) e **log de eventos** (append-only, uma linha por resposta).
+- **`EstadoDoMundo` ganhou o que a tela precisa mostrar** e não tinha como
+  deduzir: as **linhas** do outbox com a `chaveDedup`, o **tamanho** de cada
+  arquivo no parceiro e no bucket, e as **chaves de dedup que estão na fila**.
+  Continua sendo leitura de operação, e continua sem passar pelas portas do
+  domínio.
+- **`PainelEhServidoTest`** (6) — o painel é servido em `/` como HTML; o corpo
+  não contém `http://`, `https://` nem `//cdn`; os oito passos aparecem na ordem
+  do fluxo; as seis rotas de ambiente estão lá e a seção delas é outra caixa; o
+  polling de 2s existe; e o `/estado` devolve os oito blocos que a tela imprime.
+- **`ClienteHttp.pagina`** (teste) — um `GET` sem `Accept: application/json` e
+  sem parsear o corpo. O painel não é JSON, e um cliente que parseasse tudo como
+  JSON não teria como afirmar que o HTML foi servido.
+
+### Decisões
+
+- **Polling de 2s, sem WebSocket.** O estado é lido de cinco lugares e não há
+  nada empurrando. Um WebSocket exigiria inverter isso — notificar a partir dos
+  use cases — e colocaria no código de produção uma dependência que existe só
+  para a tela se atualizar sozinha.
+- **O log vem das respostas, não do `/estado`.** O polling mostra o **agora**; o
+  log mostra a **sequência**. A janela do relay só existe na sequência: no agora
+  ela já passou. É por isso que o log é append-only e nunca é limpo pelo
+  polling.
+- **A tela não deduz nada.** Ela imprime o que os endpoints devolveram, sempre
+  por `textContent`. Um painel que calculasse "provavelmente aconteceu X"
+  mentiria na primeira vez que o backend mudasse — e o que o projeto tem para
+  mostrar é o que acontece de fato entre uma chamada e outra.
+- **A seção de falhas é outra caixa e outra cor.** A separação é funcional, não
+  decorativa: quem abre o painel precisa distinguir num relance o que é operar o
+  sistema do que é sabotá-lo. Pelo mesmo motivo, o botão "o parceiro processa"
+  fica na coluna dos passos, mas com a borda tracejada dos botões de ambiente —
+  ele está no meio do fluxo e não é nosso.
+- **O `/estado` cresceu; o domínio, não.** A `chaveDedup` ao lado da linha do
+  outbox e a mesma chave ao lado da mensagem na fila são o que torna a duplicata
+  do relay **visível** em vez de deduzida — e as duas leituras são de
+  operação, feitas em `infra/consulta`, sem uma pergunta nova em porta nenhuma.
+- **A fila é espiada, não consumida.** `visibilityTimeout(0)` devolve a mensagem
+  no mesmo instante, então o painel pode perguntar de dois em dois segundos sem
+  tirar da frente do mainframe o que ele ainda não leu. É a mesma chamada do
+  `awslocal sqs receive-message` do README.
+- **O tamanho dos arquivos do parceiro custa uma conexão SSH por arquivo.** É o
+  preço de ler o outro lado pela **mesma** porta que a coleta usa, em vez de
+  abrir um caminho paralelo só para a tela. Com o punhado de arquivos de uma
+  demonstração, custa menos que a explicação de por que haveria dois jeitos de
+  listar o mesmo diretório.
+
+### Verificado
+
+- `mvn test` → 86 testes, 0 falhas (80 dos steps anteriores, 6 deste).
+- `GET /` devolve `text/html` sem nenhuma referência a host externo — asserido
+  no corpo que o navegador recebe, e não na intenção de quem escreveu.
+- `EndpointsDevolvemEfeitoTest` continua verde com o `/estado` ampliado: os
+  arquivos do parceiro e os objetos do bucket viraram objetos com `nome` e
+  `tamanho`, e as asserções passaram a ler o campo em vez do texto solto.
+- Os quinze botões apontam para rotas que a suíte já exercita por HTTP
+  (`EndpointsDevolvemEfeitoTest`, `SimuladorProduzRetornoAplicavelTest`,
+  `FalhasProvocadasTest`), e `PainelEhServidoTest` confere que os nomes dos
+  blocos que a tela lê são os que o `/estado` devolve. **O que não foi
+  verificado por teste é o navegador**: layout, clique e polling foram escritos,
+  não observados — abrir `localhost:8080` com o Compose no ar é o passo que
+  fecha o step do lado de quem olha.
+
+AI: est 2h30 / actual 45min / ~100% generated / 1 issue caught in review
+
+<!--
+O 1: a tabela do step-12.md pede "outbox com chaveDedup", "SFTP com tamanho",
+"S3 com tamanho" e "fila com chaveDedup" — e o `/estado` do step-10 devolvia
+contagens e listas de nomes. Ou o painel mostrava menos do que o step promete,
+ou o `EstadoDoMundo` crescia. Cresceu, com o cuidado de não inventar pergunta
+nova em porta de domínio: tudo veio de `infra/consulta`, e o único custo real é
+uma conexão SSH por arquivo listado.
+
+As contagens por status do outbox continuaram ao lado das linhas, em vez de
+serem substituídas por elas: a contagem responde "quanto" e a linha responde "o
+quê", e os testes dos steps 10 e 11 leem a contagem.
+
+O painel não tem botão para a quiescência, pelo mesmo motivo do step-11: ela
+precisa de um arquivo que cresça ENTRE as duas leituras de atributos, e isso não
+se provoca com dois cliques.
+-->
+
 ## [step-11] — 2026-08-31 — Simulador do parceiro e provocação de falhas
 
 As falhas que o desenho defende deixam de morar em classes de teste e passam a

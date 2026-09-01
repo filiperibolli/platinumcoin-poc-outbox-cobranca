@@ -82,7 +82,7 @@ fecha, publica. Não a ordem em que as peças foram pensadas.
   truncado, reenviado ou nenhum. Mais os dois crashes provocáveis por `POST`.
   Testes: `SimuladorProduzRetornoAplicavelTest`, `FalhasProvocadasTest`.
 
-- [ ] **step-12 — Painel HTML** · [docs/steps/step-12.md](docs/steps/step-12.md)
+- [x] **step-12 — Painel HTML** · [docs/steps/step-12.md](docs/steps/step-12.md)
   Um arquivo estático servido pelo Spring — HTML, CSS e JS puro, sem build e
   sem CDN. Botões na ordem do fluxo, falhas em seção separada, estado por
   polling de 2s e log de eventos append-only.
@@ -177,7 +177,7 @@ infra/consulta/     EstadoDoMundo (10) — o retrato das cinco fontes
 simulador/          ParceiroSimulado, RemessaLida, LayoutDeRetorno,
                     DiscoDoParceiro, FiacaoDoParceiro e simulador/http (11)
                     — o ambiente, não o sistema
-resources/static/   index.html — o painel (12)
+resources/static/   index.html — o painel (12): um arquivo, sem build
 Main                (06) — o cenário de console, que continua existindo
 AplicacaoHttp       (10) — o servidor
 ```
@@ -187,7 +187,7 @@ cinco use cases, a `api/LinhaRetorno`, o `infra/config/Ambiente`, o
 `TransacaoJdbc`, os quatro repositórios, o `Payload`, o
 `PublicadorLancamentoSqs` e o `Main`, que amarra as peças num cenário só.
 
-O que está marcado com (12) é plano, não código. A régua para julgá-lo é
-a mesma: cada arquivo com uma responsabilidade que dá para nomear sem usar "e".
-Se um step apertar, corta-se **escopo** — regra de negócio, canal, formato —
-nunca os testes de falha.
+Os doze steps estão escritos, e a régua continua a mesma: cada arquivo com uma
+responsabilidade que dá para nomear sem usar "e". Se um step novo apertar,
+corta-se **escopo** — regra de negócio, canal, formato — nunca os testes de
+falha.

@@ -353,10 +353,50 @@ depender de qual das duas coisas chegou primeiro. Ela continua provada por
 `ArquivoEmEscritaNaoEhBaixadoTest`, onde o crescimento acontece exatamente entre
 as duas leituras.
 
-O painel (`GET /`) — step-12, ainda plano — é um único arquivo HTML servido
-pelo Spring, sem build e sem CDN: botões na ordem do fluxo, uma seção separada
-para provocar falhas, o estado das cinco fontes por polling de 2s e um log
-append-only de cada transição.
+### Abrir o painel
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+mvn spring-boot:run
+# abra localhost:8080 no navegador
+```
+
+`GET /` é o painel: **um arquivo** (`src/main/resources/static/index.html`),
+HTML, CSS e JavaScript inline, sem build, sem framework e sem CDN. Ele tem três
+colunas:
+
+- **operar o ciclo** — um botão por passo, na ordem do fluxo, mais o recorte
+  (ciclo, banco, data, quantidade de faturas, distribuição de desfechos);
+- **estado** — o `GET /estado` relido de dois em dois segundos: tentativas por
+  status, ciclos, linhas do outbox com a `chaveDedup`, os arquivos no diretório
+  do parceiro, os objetos no bucket e as chaves que estão na fila;
+- **log de eventos** — append-only, uma linha por resposta de endpoint, com
+  horário, código e o corpo exato que voltou.
+
+O log **não** é derivado do estado, e essa é a decisão que faz o painel valer:
+o polling mostra o **agora**, o log mostra a **sequência**. A janela do relay só
+aparece na sequência — no agora ela já passou.
+
+Um roteiro de dois minutos, e o que olhar em cada passo:
+
+```
+criar faturas → montar ciclo → gerar remessa → enviar ao parceiro
+   ↳ o arquivo aparece no bloco SFTP, e o mesmo objeto aparece no bloco S3
+
+o parceiro processa → coletar retorno
+   ↳ tentativas viram PAGO / NAO_PAGO / ERRO, e o outbox ganha UMA linha:
+     só PAGO gera lançamento
+
+armar crash do relay → publicar outbox   (409 no log, linha ainda PENDENTE)
+publicar outbox                          (agora sim, PUBLICADO)
+   ↳ o bloco fila mostra a MESMA chaveDedup duas vezes: at-least-once
+     acontecendo na tela
+```
+
+A tela **não deduz nada**: ela imprime o que os endpoints devolveram. Um painel
+que calculasse "provavelmente aconteceu X" mentiria na primeira vez que o
+backend mudasse — e o que este projeto tem para mostrar é justamente o que
+acontece de fato entre uma chamada e outra.
 
 ### Inspecionar a fila enquanto roda
 
@@ -502,11 +542,10 @@ src/main/java/...
 src/main/resources/static/index.html   o painel: um arquivo, sem build
 ```
 
-O painel é o step-12 — plano, não código. O resto existe: o `simulador/` e o
+Os doze steps estão escritos: o painel é o step-12, o `simulador/` e o
 `infra/falha` são o step-11, `api/http` mais o `AplicacaoHttp` são o step-10, a
 coleta do retorno é o step-09, e o armazenamento no S3 e a transmissão por SFTP
-são os steps 07 e 08.
-Ver [PLAN.md](PLAN.md) para o que já está escrito e o que ainda é plano.
+são os steps 07 e 08. Ver [PLAN.md](PLAN.md) para o que cada um entregou.
 
 Máquina de estados:
 

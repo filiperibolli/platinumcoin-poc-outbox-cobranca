@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>painel — mini-outbox-cobrança</title>
+<style>
+  /* Um arquivo, sem build e sem CDN. O painel é acessório do projeto, não um
+     segundo projeto: `npm install` para ver um mecanismo de backend seria a
+     contradição óbvia, e um <script src> remoto seria pior — transformaria um
+     demo local numa coisa que só funciona com internet. */
+  :root {
+    --fundo: #10131a;
+    --painel: #171b24;
+    --borda: #262c3a;
+    --texto: #e6e9f0;
+    --fraco: #8992a6;
+    --passo: #6ea8fe;
+    --falha: #f4756b;
+    --ok: #4ade80;
+    --alerta: #fbbf24;
+    --fonte: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 14px/1.5 var(--fonte);
+  }
+  h1 { font-size: 18px; margin: 0; }
+  h2 {
+    font-size: 12px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--fraco);
+    margin: 0 0 10px;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  header p { margin: 0; color: var(--fraco); font-size: 13px; }
+  main {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section {
+    background: var(--painel);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .coluna { display: grid; gap: 16px; }
+
+  /* A seção de falhas é outra cor e outra caixa de propósito: quem abre o
+     painel precisa distinguir num relance o que é operar o sistema do que é
+     sabotá-lo. A separação é funcional, não decorativa. */
+  section.falhas { border-color: #4a2a2c; background: #1d161a; }
+  section.falhas h2 { color: var(--falha); }
+
+  label { display: block; font-size: 11px; color: var(--fraco); margin-bottom: 3px; }
+  .campos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .campos .largo { grid-column: 1 / -1; }
+  input {
+    width: 100%;
+    padding: 6px 8px;
+    background: #0d1017;
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    color: var(--texto);
+    font: 13px var(--mono);
+  }
+  button {
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: #0d1017;
+    border: 1px solid var(--borda);
+    border-left: 3px solid var(--passo);
+    border-radius: 6px;
+    color: var(--texto);
+    font: 13px var(--fonte);
+    cursor: pointer;
+  }
+  button:hover:enabled { background: #151a24; }
+  button:disabled { opacity: .45; cursor: progress; }
+  button .ordem { color: var(--fraco); font: 11px var(--mono); margin-right: 6px; }
+  section.falhas button { border-left-color: var(--falha); }
+  button.ambiente { border-left-color: var(--alerta); border-left-style: dashed; }
+  .nota { color: var(--fraco); font-size: 11px; margin: -2px 0 10px 12px; }
+  .grupo { color: var(--fraco); font-size: 11px; margin: 12px 0 6px; }
+
+  .bloco + .bloco { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--borda); }
+  .bloco h3 { font-size: 12px; margin: 0 0 6px; color: var(--fraco); font-weight: 600; }
+  .selos { display: flex; flex-wrap: wrap; gap: 6px; }
+  .selo {
+    font: 11px var(--mono);
+    padding: 2px 7px;
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    background: #0d1017;
+  }
+  table { width: 100%; border-collapse: collapse; font: 12px var(--mono); }
+  td, th { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; }
+  th { color: var(--fraco); font-weight: 500; }
+  td.tamanho { color: var(--fraco); text-align: right; white-space: nowrap; }
+  .vazio { color: var(--fraco); font-size: 12px; font-style: italic; }
+
+  #log { max-height: 70vh; overflow-y: auto; }
+  .evento { border-top: 1px solid var(--borda); padding: 7px 0; }
+  .evento:first-child { border-top: 0; }
+  .cabeca { display: flex; gap: 8px; align-items: baseline; font: 12px var(--mono); }
+  .hora { color: var(--fraco); }
+  .rota { color: var(--texto); }
+  .status { font-weight: 700; }
+  .status.bom { color: var(--ok); }
+  .status.ruim { color: var(--falha); }
+  .corpo {
+    font: 11px/1.45 var(--mono);
+    color: var(--fraco);
+    margin-top: 4px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mini-outbox-cobrança</h1>
+  <p>cada botão é uma execução do job que, em produção, o EventBridge dispararia por horário</p>
+</header>
+
+<main>
+  <div class="coluna">
+    <section>
+      <h2>o recorte</h2>
+      <div class="campos">
+        <div class="largo"><label for="ciclo">ciclo</label><input id="ciclo" value="C-1"></div>
+        <div><label for="banco">banco</label><input id="banco" value="341"></div>
+        <div><label for="data">data de referência</label><input id="data" type="date"></div>
+        <div><label for="quantidade">faturas</label><input id="quantidade" type="number" min="1" max="99" value="3"></div>
+        <div><label for="resultado">desfechos</label><input id="resultado" value="PAGO,NAO_PAGO,ERRO"></div>
+      </div>
+
+      <h2>operar o ciclo</h2>
+      <button onclick="chamar('/faturas?quantidade=' + campo('quantidade') + '&amp;' + recorte())"><span class="ordem">1</span>criar faturas</button>
+      <button onclick="chamar('/ciclo/montar?ciclo=' + campo('ciclo') + '&amp;' + recorte())"><span class="ordem">2</span>montar ciclo</button>
+      <button onclick="chamar('/ciclo/gerar-remessa?ciclo=' + campo('ciclo'))"><span class="ordem">3</span>gerar remessa</button>
+      <button onclick="chamar('/ciclo/enviar?ciclo=' + campo('ciclo'))"><span class="ordem">4</span>enviar ao parceiro</button>
+      <button class="ambiente" onclick="chamar('/parceiro/processar?resultado=' + campo('resultado'))"><span class="ordem">5</span>o parceiro processa</button>
+      <p class="nota">é o ambiente, não o sistema: ele lê a remessa do SFTP e escreve o retorno</p>
+      <button onclick="chamar('/ciclo/coletar')"><span class="ordem">6</span>coletar retorno</button>
+      <button onclick="chamar('/ciclo/fechar?ciclo=' + campo('ciclo'))"><span class="ordem">7</span>fechar ciclo</button>
+      <button onclick="chamar('/outbox/publicar')"><span class="ordem">8</span>publicar outbox</button>
+    </section>
+
+    <section class="falhas">
+      <h2>provocar falha</h2>
+
+      <p class="grupo">o parceiro se comportando mal</p>
+      <button onclick="chamar('/parceiro/processar?particionar=3&amp;resultado=' + campo('resultado'))">retorno particionado em 3</button>
+      <button onclick="chamar('/parceiro/processar?atrasar=true&amp;resultado=' + campo('resultado'))">entregar só uma parte</button>
+      <p class="nota">o resto sai na próxima chamada; até lá o ciclo espera</p>
+      <button onclick="chamar('/parceiro/reenviar-retorno')">reenviar o mesmo retorno</button>
+      <button onclick="chamar('/parceiro/retorno-truncado')">retorno truncado</button>
+      <button onclick="chamar('/parceiro/silencio')">silêncio — não escrever nada</button>
+
+      <p class="grupo">as duas janelas do nosso lado</p>
+      <button onclick="chamar('/falha/crash-relay')">armar crash do relay</button>
+      <p class="nota">dispara no próximo <em>publicar outbox</em>: a mensagem sai, a linha não é marcada</p>
+      <button onclick="chamar('/falha/crash-envio')">armar crash do envio</button>
+      <p class="nota">dispara no próximo <em>enviar ao parceiro</em>: o arquivo chega, o commit não acontece</p>
+    </section>
+  </div>
+
+  <section>
+    <h2>estado <span id="relogio" class="hora"></span></h2>
+
+    <div class="bloco">
+      <h3>tentativas</h3>
+      <div id="tentativas" class="selos"></div>
+    </div>
+
+    <div class="bloco">
+      <h3>ciclos</h3>
+      <div id="ciclos"></div>
+    </div>
+
+    <div class="bloco">
+      <h3>outbox</h3>
+      <div id="outbox" class="selos"></div>
+      <div id="lancamentos"></div>
+    </div>
+
+    <div class="bloco">
+      <h3>diretório do parceiro (SFTP)</h3>
+      <div id="parceiro"></div>
+    </div>
+
+    <div class="bloco">
+      <h3>artefatos (S3)</h3>
+      <div id="artefatos"></div>
+    </div>
+
+    <div class="bloco">
+      <h3>fila (SQS)</h3>
+      <div id="fila"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>log de eventos</h2>
+    <div id="log"><p class="vazio">nenhuma chamada ainda</p></div>
+  </section>
+</main>
+
+<script>
+// A tela não deduz nada: ela imprime o que os endpoints devolveram. Um painel
+// que calculasse "provavelmente aconteceu X" mentiria na primeira vez que o
+// backend mudasse.
+'use strict';
+
+var ocupado = false;
+
+function campo(id) {
+  return encodeURIComponent(document.getElementById(id).value.trim());
+}
+
+function recorte() {
+  return 'banco=' + campo('banco') + '&data=' + campo('data');
+}
+
+function hora() {
+  return new Date().toTimeString().slice(0, 8);
+}
+
+/** Um POST, uma linha no log, e o estado relido logo depois. */
+async function chamar(caminho) {
+  travar(true);
+  try {
+    var resposta = await fetch(caminho, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' }
+    });
+    registrar(caminho, String(resposta.status), await resposta.text(), resposta.ok);
+  } catch (erro) {
+    // O servidor não respondeu. É a única coisa que a tela afirma por conta
+    // própria, e ainda assim é sobre a chamada, não sobre o mecanismo.
+    registrar(caminho, 'sem resposta', String(erro), false);
+  } finally {
+    travar(false);
+    atualizar();
+  }
+}
+
+function travar(travado) {
+  ocupado = travado;
+  var botoes = document.querySelectorAll('button');
+  for (var i = 0; i < botoes.length; i++) {
+    botoes[i].disabled = travado;
+  }
+}
+
+/**
+ * O log é append-only e vem das RESPOSTAS, não do /estado: o polling mostra o
+ * agora, e o log mostra a sequência. A janela do relay, por exemplo, só existe
+ * na sequência — no agora ela já passou.
+ */
+function registrar(rota, status, corpo, bom) {
+  var log = document.getElementById('log');
+  if (log.firstElementChild && log.firstElementChild.className === 'vazio') {
+    log.textContent = '';
+  }
+
+  var evento = document.createElement('div');
+  evento.className = 'evento';
+
+  var cabeca = document.createElement('div');
+  cabeca.className = 'cabeca';
+  cabeca.appendChild(criar('span', 'hora', hora()));
+  cabeca.appendChild(criar('span', 'status ' + (bom ? 'bom' : 'ruim'), status));
+  cabeca.appendChild(criar('span', 'rota', 'POST ' + decodeURIComponent(rota)));
+  evento.appendChild(cabeca);
+  evento.appendChild(criar('div', 'corpo', corpo));
+
+  log.appendChild(evento);
+  log.scrollTop = log.scrollHeight;
+}
+
+function criar(tag, classe, texto) {
+  var elemento = document.createElement(tag);
+  elemento.className = classe;
+  elemento.textContent = texto;
+  return elemento;
+}
+
+/** As cinco fontes, relidas de dois em dois segundos. */
+async function atualizar() {
+  if (ocupado) {
+    return;
+  }
+  try {
+    var resposta = await fetch('/estado', { headers: { 'Accept': 'application/json' } });
+    if (!resposta.ok) {
+      return;
+    }
+    desenhar(await resposta.json());
+    document.getElementById('relogio').textContent = hora();
+  } catch (erro) {
+    document.getElementById('relogio').textContent = 'sem resposta';
+  }
+}
+
+function desenhar(estado) {
+  selos('tentativas', estado.tentativas);
+  selos('outbox', estado.outbox);
+
+  tabela('ciclos', ['ciclo', 'banco', 'data', 'status'],
+    estado.ciclos.map(function (ciclo) {
+      return [ciclo.id, ciclo.banco, ciclo.dataRef, ciclo.status];
+    }));
+
+  tabela('lancamentos', ['#', 'chaveDedup', 'status'],
+    estado.lancamentos.map(function (linha) {
+      return [String(linha.id), linha.chaveDedup, linha.status];
+    }));
+
+  var arquivos = [];
+  estado.parceiro.remessa.forEach(function (arquivo) {
+    arquivos.push([arquivo.nome, bytes(arquivo.tamanho)]);
+  });
+  estado.parceiro.retorno.forEach(function (arquivo) {
+    arquivos.push([arquivo.nome, bytes(arquivo.tamanho)]);
+  });
+  tabela('parceiro', ['arquivo', 'bytes'], arquivos);
+
+  tabela('artefatos', ['chave', 'bytes'], estado.artefatos.map(function (artefato) {
+    return [artefato.nome, bytes(artefato.tamanho)];
+  }));
+
+  tabela('fila', ['chaveDedup na fila (' + estado.mensagensNaFila + ' mensagens)'],
+    estado.chavesNaFila.map(function (chave) {
+      return [chave];
+    }));
+}
+
+function bytes(tamanho) {
+  return String(tamanho);
+}
+
+function selos(id, contagens) {
+  var destino = document.getElementById(id);
+  destino.textContent = '';
+  var chaves = Object.keys(contagens);
+  if (chaves.length === 0) {
+    destino.appendChild(criar('span', 'vazio', 'nada ainda'));
+    return;
+  }
+  chaves.forEach(function (chave) {
+    destino.appendChild(criar('span', 'selo', chave + ' ' + contagens[chave]));
+  });
+}
+
+/** Sempre por textContent: o que a tela imprime vem do servidor. */
+function tabela(id, colunas, linhas) {
+  var destino = document.getElementById(id);
+  destino.textContent = '';
+  if (linhas.length === 0) {
+    destino.appendChild(criar('p', 'vazio', 'vazio'));
+    return;
+  }
+
+  var tabela = document.createElement('table');
+  var cabecalho = document.createElement('tr');
+  colunas.forEach(function (coluna) {
+    cabecalho.appendChild(criar('th', '', coluna));
+  });
+  tabela.appendChild(cabecalho);
+
+  linhas.forEach(function (linha) {
+    var tr = document.createElement('tr');
+    linha.forEach(function (valor, posicao) {
+      var ultima = posicao === linha.length - 1 && linha.length > 1;
+      tr.appendChild(criar('td', ultima ? 'tamanho' : '', valor));
+    });
+    tabela.appendChild(tr);
+  });
+  destino.appendChild(tabela);
+}
+
+// A data de hoje no fuso de quem está olhando: o recorte da demonstração é o
+// dia dele, e não o UTC.
+var agora = new Date();
+document.getElementById('data').value =
+  agora.getFullYear() + '-'
+  + String(agora.getMonth() + 1).padStart(2, '0') + '-'
+  + String(agora.getDate()).padStart(2, '0');
+
+atualizar();
+setInterval(atualizar, 2000);
+</script>
+</body>
+</html>
